@@ -1,0 +1,144 @@
+# omv default keymap. Copy to ~/.config/omv/config.yaml and edit — your file is
+# merged over this one, so you only need to write the differences. Remove a
+# default binding by mapping it to `nop`.
+#
+# Key notation: bare characters are literal (`dd` is two presses), angle brackets
+# name special keys (`<C-p>`, `<Esc>`, `<Space>`, `<leader>`, `<F5>`).
+# Run `omv --list-actions` for every binding target.
+
+leader: "<Space>"
+indent_width: 4
+line_numbers: relative   # absolute | relative | none
+theme: default
+
+keys:
+  normal:
+    # motion
+    h: move_left
+    l: move_right
+    j: move_down
+    k: move_up
+    "<Left>": move_left
+    "<Right>": move_right
+    "<Down>": move_down
+    "<Up>": move_up
+    w: move_word_forward
+    b: move_word_backward
+    e: move_word_end
+    "0": move_line_start
+    "^": move_line_first_non_blank
+    "$": move_line_end
+    gg: move_file_start
+    G: move_file_end
+    "<C-d>": move_half_page_down
+    "<C-u>": move_half_page_up
+    "%": move_matching_pair
+
+    # modes
+    i: insert_mode
+    a: insert_after
+    I: insert_line_start
+    A: insert_line_end
+    o: open_line_below
+    O: open_line_above
+    v: visual_mode
+    V: visual_line_mode
+    ":": command_mode
+
+    # editing
+    x: delete_char_forward
+    X: delete_char_backward
+    dd: delete_line
+    D: delete_to_line_end
+    dw: delete_word
+    cc: change_line
+    C: change_to_line_end
+    cw: change_word
+    yy: yank_line
+    p: paste_after
+    P: paste_before
+    J: join_lines
+    ">>": indent
+    "<<": outdent
+    u: undo
+    "<C-r>": redo
+
+    # text objects
+    diw: delete_inside_word
+    daw: delete_around_word
+    "di(": delete_inside_paren
+    "da(": delete_around_paren
+    "di[": delete_inside_bracket
+    "da[": delete_around_bracket
+    "di{": delete_inside_brace
+    "da{": delete_around_brace
+    'di"': delete_inside_quote
+    'da"': delete_around_quote
+    ciw: change_inside_word
+    "ci(": change_inside_paren
+    "ci[": change_inside_bracket
+    "ci{": change_inside_brace
+    'ci"': change_inside_quote
+    yiw: yank_inside_word
+    "yi(": yank_inside_paren
+    "yi{": yank_inside_brace
+
+    # search
+    "/": search_forward
+    n: search_next
+    N: search_prev
+
+    # panels
+    "<leader>e": toggle_explorer
+    "<leader>o": focus_explorer
+    "<C-p>": find_files
+    "<leader>ff": find_files
+    "<leader>fg": find_text
+    "<leader>fb": find_buffers
+    "<leader>d": toggle_diagnostics
+
+    # lsp
+    K: lsp_hover
+    gd: lsp_goto_definition
+    gr: lsp_references
+    "<leader>rn": lsp_rename
+    "<leader>fm": lsp_format
+    "]d": lsp_next_diagnostic
+    "[d": lsp_prev_diagnostic
+
+    # buffers
+    "<leader>w": save
+    "<leader>q": quit
+    "<Tab>": next_buffer
+    "<S-Tab>": prev_buffer
+
+  insert:
+    "<Esc>": normal_mode
+    "<C-c>": normal_mode
+    "<C-w>": delete_word
+
+  visual:
+    h: move_left
+    l: move_right
+    j: move_down
+    k: move_up
+    w: move_word_forward
+    b: move_word_backward
+    e: move_word_end
+    "0": move_line_start
+    "^": move_line_first_non_blank
+    "$": move_line_end
+    gg: move_file_start
+    G: move_file_end
+    "%": move_matching_pair
+    "<Esc>": normal_mode
+    d: delete_selection
+    x: delete_selection
+    c: change_selection
+    y: yank_selection
+    ">": indent
+    "<": outdent
+    ":": command_mode
+
+  command:
+    "<Esc>": normal_mode

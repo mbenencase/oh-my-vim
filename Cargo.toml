@@ -1,0 +1,28 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/omv",
+    "crates/omv-core",
+    "crates/omv-config",
+    "crates/omv-syntax",
+    "crates/omv-lsp",
+    "crates/omv-find",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+
+[workspace.dependencies]
+omv-core = { path = "crates/omv-core" }
+omv-config = { path = "crates/omv-config" }
+omv-syntax = { path = "crates/omv-syntax" }
+omv-lsp = { path = "crates/omv-lsp" }
+omv-find = { path = "crates/omv-find" }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
