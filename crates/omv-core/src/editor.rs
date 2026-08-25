@@ -19,6 +19,8 @@ pub enum Effect {
     ToggleExplorer,
     FocusExplorer,
     ToggleDiagnostics,
+    /// Show the key-binding reference.
+    ShowKeys,
     OpenPicker(Picker),
     Lsp(LspIntent),
     /// Show a message on the status line.
@@ -614,6 +616,7 @@ impl Editor {
             Action::ToggleExplorer => vec![Effect::ToggleExplorer],
             Action::FocusExplorer => vec![Effect::FocusExplorer],
             Action::ToggleDiagnostics => vec![Effect::ToggleDiagnostics],
+            Action::ShowKeys => vec![Effect::ShowKeys],
             Action::FindFiles => vec![Effect::OpenPicker(Picker::Files)],
             Action::FindText => vec![Effect::OpenPicker(Picker::Text)],
             Action::FindBuffers => vec![Effect::OpenPicker(Picker::Buffers)],
@@ -791,6 +794,9 @@ impl Editor {
                 },
                 None => vec![Effect::Status("E: :e needs a path".into())],
             },
+            // `!` is conventionally vim's shell-escape, so `:keys` is the real
+            // name and `:!keys` is accepted as an alias rather than claiming `!`.
+            "keys" | "!keys" | "map" => self.dispatch(Action::ShowKeys, None),
             "bn" => self.dispatch(Action::NextBuffer, None),
             "bp" => self.dispatch(Action::PrevBuffer, None),
             other => match other.parse::<usize>() {

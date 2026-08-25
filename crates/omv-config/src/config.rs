@@ -104,6 +104,11 @@ impl Config {
         Config::merge(base, None, None)
     }
 
+    /// Test hook: merge without touching the filesystem.
+    pub fn merge_for_test(base: RawConfig, user: Option<RawConfig>) -> Config {
+        Config::merge(base, user, None).expect("merge")
+    }
+
     fn merge(
         base: RawConfig,
         user: Option<RawConfig>,

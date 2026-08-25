@@ -21,7 +21,8 @@ cargo run -p omv -- src/main.rs
 | **Search** | `/pattern`, `n`, `N` |
 | **LSP** | diagnostics, hover, go-to-definition, references, formatting |
 | **Syntax** | tree-sitter (Rust, JSON) |
-| **Ex commands** | `:w :q :q! :wq :e <path> :bn :bp :42` |
+| **Ex commands** | `:w :q :q! :wq :e <path> :bn :bp :42 :keys` |
+| **Key reference** | `:keys` (or `<leader>?`) lists every binding and what it does |
 
 ## Configuration
 
@@ -52,6 +53,25 @@ Two things make the config hard to get wrong:
   with a line number instead of silently doing nothing at 2am.
 - `omv --list-actions` prints every bindable action; `omv --list-keys` prints the
   keymap you actually ended up with after the merge.
+
+### Seeing your bindings
+
+`:keys` (aliases `:map`, `:!keys`; bound to `<leader>?`) opens a reference of
+every binding, grouped by mode and category, with a description of each action:
+
+```
+NORMAL MODE
+  Motion
+  h          move_left                  Cursor one character left
+  <Left>     move_left                  Cursor one character left
+  w          move_word_forward          Start of next word
+  Editing
+  dd         delete_line                Delete the whole line into the register
+```
+
+It is built from the *resolved* keymap, so it shows your overrides and omits
+anything you removed with `nop` — it can't drift from the real bindings.
+`j`/`k` scroll, `<C-d>`/`<C-u>` page, `g`/`G` jump to the ends, `Esc` closes.
 
 ## Architecture
 

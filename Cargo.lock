@@ -1077,6 +1077,7 @@ dependencies = [
  "omv-lsp",
  "omv-syntax",
  "ratatui",
+ "serde_yaml_ng",
  "tracing",
  "tracing-subscriber",
  "unicode-width",

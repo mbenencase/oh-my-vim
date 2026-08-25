@@ -71,12 +71,32 @@ impl KeyMap {
         })
     }
 
+    /// Modes carrying bindings of their own, in the order a reader expects.
+    /// `VisualLine` appears only when it overrides something, since it otherwise
+    /// inherits Visual and would just duplicate it in a listing.
+    pub fn modes(&self) -> Vec<Mode> {
+        [
+            Mode::Normal,
+            Mode::Insert,
+            Mode::Visual,
+            Mode::VisualLine,
+            Mode::Command,
+        ]
+        .into_iter()
+        .filter(|mode| self.modes.contains_key(mode))
+        .collect()
+    }
+
     pub fn describe(&self, mode: Mode) -> Vec<(String, Action)> {
         let mut out = Vec::new();
         if let Some(root) = self.root(mode) {
             collect(root, &mut String::new(), &mut out);
         }
-        out.sort_by(|a, b| a.0.cmp(&b.0));
+        // Declaration order groups motions, then edits, then panels — far more
+        // useful to read than an alphabetical list of key strings. Within one
+        // action, plain keys lead and `<Named>` synonyms follow, so `h` is listed
+        // before `<Left>` rather than after it.
+        out.sort_by_key(|(keys, action)| (action.order(), keys.starts_with('<'), keys.clone()));
         out
     }
 }

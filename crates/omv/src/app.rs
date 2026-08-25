@@ -12,6 +12,7 @@ use omv_syntax::{Highlighter, Span};
 
 use crate::event::{AppEvent, to_key};
 use crate::explorer::Explorer;
+use crate::help::Help;
 use crate::picker::{Item, Payload, Picker, PickerKind};
 use crate::theme::Theme;
 
@@ -20,6 +21,7 @@ pub enum Focus {
     Editor,
     Explorer,
     Picker,
+    Help,
 }
 
 pub struct App {
@@ -30,6 +32,7 @@ pub struct App {
     pub focus: Focus,
     pub explorer: Explorer,
     pub picker: Option<Picker>,
+    pub help: Option<Help>,
     pub diagnostics: HashMap<PathBuf, Vec<Diagnostic>>,
     pub diagnostics_visible: bool,
     pub hover: Option<String>,
@@ -68,6 +71,7 @@ impl App {
             focus: Focus::Editor,
             explorer: Explorer::new(root.clone()),
             picker: None,
+            help: None,
             diagnostics: HashMap::new(),
             diagnostics_visible: false,
             hover: None,
@@ -126,6 +130,7 @@ impl App {
         // Any keypress dismisses a hover popup, the way it works everywhere else.
         self.hover = None;
         match self.focus {
+            Focus::Help => self.handle_help_key(key),
             Focus::Picker => self.handle_picker_key(key),
             Focus::Explorer => self.handle_explorer_key(key),
             Focus::Editor => self.handle_editor_key(key),
@@ -172,6 +177,34 @@ impl App {
             },
         };
         self.apply_effects(effects);
+    }
+
+    fn handle_help_key(&mut self, key: KeyEvent) {
+        // Sized for the panel the renderer draws: the popup's inner height minus
+        // its header row. Close enough that a page scroll lands where you expect.
+        let viewport = self.text_height.saturating_sub(4).max(1);
+        let Some(help) = &mut self.help else {
+            self.focus = Focus::Editor;
+            return;
+        };
+        let ctrl = key
+            .modifiers
+            .contains(crossterm::event::KeyModifiers::CONTROL);
+        match key.code {
+            CtKey::Char('j') | CtKey::Down => help.scroll_by(1, viewport),
+            CtKey::Char('k') | CtKey::Up => help.scroll_by(-1, viewport),
+            CtKey::Char('d') if ctrl => help.scroll_by(viewport as isize / 2, viewport),
+            CtKey::Char('u') if ctrl => help.scroll_by(-(viewport as isize) / 2, viewport),
+            CtKey::PageDown => help.scroll_by(viewport as isize, viewport),
+            CtKey::PageUp => help.scroll_by(-(viewport as isize), viewport),
+            CtKey::Char('g') | CtKey::Home => help.scroll_to_top(),
+            CtKey::Char('G') | CtKey::End => help.scroll_to_bottom(viewport),
+            CtKey::Esc | CtKey::Char('q') | CtKey::Enter => {
+                self.help = None;
+                self.focus = Focus::Editor;
+            }
+            _ => {}
+        }
     }
 
     fn handle_explorer_key(&mut self, key: KeyEvent) {
@@ -309,6 +342,11 @@ impl App {
                 }
                 Effect::ToggleDiagnostics => {
                     self.diagnostics_visible = !self.diagnostics_visible;
+                }
+                Effect::ShowKeys => {
+                    // Rebuilt on each open so it reflects the live keymap.
+                    self.help = Some(Help::build(&self.config));
+                    self.focus = Focus::Help;
                 }
                 Effect::OpenPicker(kind) => self.open_picker(kind),
                 Effect::Lsp(intent) => self.send_lsp(intent),

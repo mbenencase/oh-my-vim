@@ -9,6 +9,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthChar;
 
 use crate::app::{App, Focus};
+use crate::help::HelpRow;
 use crate::theme::Theme;
 
 const EXPLORER_WIDTH: u16 = 30;
@@ -63,6 +64,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     if app.picker.is_some() {
         render_picker(frame, app, body);
+    }
+    if app.help.is_some() {
+        render_help(frame, app, body);
     }
     if app.hover.is_some() {
         render_hover(frame, app, text_area);
@@ -394,6 +398,76 @@ fn render_picker(frame: &mut Frame, app: &App, area: Rect) {
         Text::from(rows)
     };
     frame.render_widget(Paragraph::new(body), list_area);
+}
+
+fn render_help(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(help) = &app.help else { return };
+    let theme = &app.theme;
+
+    let width = area.width.saturating_sub(4).clamp(30, 96);
+    let height = area.height.saturating_sub(2).clamp(8, 40);
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, popup);
+
+    let shown = help.rows.len();
+    let block = panel_block(theme, " Key bindings ", true).title_bottom(Span::styled(
+        format!(" {shown} rows · j/k scroll · g/G ends · Esc close "),
+        Style::default().fg(theme.gutter),
+    ));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let key_width = help.key_width.min(16);
+    let action_width = help.action_width.min(26);
+
+    let lines: Vec<Line> = help
+        .rows
+        .iter()
+        .skip(help.scroll)
+        .take(inner.height as usize)
+        .map(|row| match row {
+            HelpRow::Mode(label) => Line::from(Span::styled(
+                format!("{label} MODE"),
+                Style::default()
+                    .fg(theme.panel_title)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            HelpRow::Blank => Line::default(),
+            HelpRow::Category(label) => Line::from(Span::styled(
+                format!("  {label}"),
+                Style::default()
+                    .fg(theme.gutter_current)
+                    .add_modifier(Modifier::ITALIC),
+            )),
+            HelpRow::Binding {
+                keys,
+                action,
+                description,
+            } => Line::from(vec![
+                Span::styled(
+                    format!("  {keys:<key_width$}  "),
+                    Style::default()
+                        .fg(theme.keyword)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{action:<action_width$}  "),
+                    Style::default().fg(theme.function),
+                ),
+                Span::styled(
+                    description.to_string(),
+                    Style::default().fg(theme.foreground),
+                ),
+            ]),
+        })
+        .collect();
+
+    frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
 fn render_hover(frame: &mut Frame, app: &App, area: Rect) {

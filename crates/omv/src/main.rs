@@ -1,6 +1,7 @@
 mod app;
 mod event;
 mod explorer;
+mod help;
 mod picker;
 mod theme;
 mod ui;
@@ -46,8 +47,13 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     if args.list_actions {
-        for (_, name, description) in Action::ALL {
-            println!("{name:<28} {description}");
+        let mut category = "";
+        for (_, name, action_category, description) in Action::ALL {
+            if *action_category != category {
+                category = action_category;
+                println!("\n{category}");
+            }
+            println!("  {name:<28} {description}");
         }
         return Ok(());
     }
@@ -207,6 +213,126 @@ mod tests {
         app.apply_effects_for_test(effects);
         let out = screen(&mut app);
         assert!(out.contains("Explorer"), "explorer must be visible:\n{out}");
+    }
+
+    fn press(app: &mut App, code: crossterm::event::KeyCode) {
+        app.handle_event(AppEvent::Input(crossterm::event::Event::Key(
+            crossterm::event::KeyEvent::from(code),
+        )));
+    }
+
+    #[test]
+    fn show_keys_renders_bindings_with_their_descriptions() {
+        let mut app = test_app();
+        let effects = app.editor.dispatch(Action::ShowKeys, None);
+        app.apply_effects_for_test(effects);
+        assert_eq!(app.focus, Focus::Help);
+
+        let out = screen(&mut app);
+        assert!(out.contains("Key bindings"), "panel must be framed:\n{out}");
+        assert!(out.contains("NORMAL MODE"), "modes must be grouped:\n{out}");
+        assert!(out.contains("Motion"), "categories must be grouped:\n{out}");
+        assert!(
+            out.contains("move_left"),
+            "action names must be listed:\n{out}"
+        );
+        assert!(
+            out.contains("Cursor one character left"),
+            "descriptions must show:\n{out}"
+        );
+    }
+
+    #[test]
+    fn both_keys_and_bang_keys_open_the_panel() {
+        for command in ["keys", "!keys", "map"] {
+            let mut app = test_app();
+            app.editor.command_line = command.to_string();
+            let effects = app.editor.execute_command_line();
+            app.apply_effects_for_test(effects);
+            assert!(app.help.is_some(), ":{command} must open the key reference");
+        }
+    }
+
+    #[test]
+    fn the_panel_scrolls_and_clamps_at_both_ends() {
+        let mut app = test_app();
+        let effects = app.editor.dispatch(Action::ShowKeys, None);
+        app.apply_effects_for_test(effects);
+        screen(&mut app); // establishes text_height, which sizes the scroll page
+
+        press(&mut app, crossterm::event::KeyCode::Char('k'));
+        assert_eq!(
+            app.help.as_ref().unwrap().scroll,
+            0,
+            "cannot scroll above the top"
+        );
+
+        press(&mut app, crossterm::event::KeyCode::Char('j'));
+        assert_eq!(app.help.as_ref().unwrap().scroll, 1);
+
+        press(&mut app, crossterm::event::KeyCode::Char('G'));
+        let bottom = app.help.as_ref().unwrap().scroll;
+        assert!(bottom > 1, "G must jump to the end");
+        press(&mut app, crossterm::event::KeyCode::Char('j'));
+        assert_eq!(
+            app.help.as_ref().unwrap().scroll,
+            bottom,
+            "cannot scroll past the end"
+        );
+
+        press(&mut app, crossterm::event::KeyCode::Char('g'));
+        assert_eq!(app.help.as_ref().unwrap().scroll, 0);
+    }
+
+    #[test]
+    fn esc_closes_the_panel_and_returns_focus() {
+        let mut app = test_app();
+        let effects = app.editor.dispatch(Action::ShowKeys, None);
+        app.apply_effects_for_test(effects);
+        press(&mut app, crossterm::event::KeyCode::Esc);
+        assert!(app.help.is_none());
+        assert_eq!(app.focus, Focus::Editor);
+    }
+
+    #[test]
+    fn the_panel_reflects_the_users_own_bindings() {
+        use omv_config::config::RawConfig;
+        // Built from the resolved keymap, so a user override must show up and a
+        // binding they removed with `nop` must not.
+        let (tx, _rx) = channel();
+        let (lsp_tx, _lsp_rx) = channel();
+        let base: RawConfig =
+            serde_yaml_ng::from_str(include_str!("../../omv-config/assets/default.yaml")).unwrap();
+        let user: RawConfig =
+            serde_yaml_ng::from_str("keys:\n  normal:\n    zz: join_lines\n    x: nop\n").unwrap();
+        let config = omv_config::Config::merge_for_test(base, Some(user));
+        let mut app = App::new(config, std::env::current_dir().unwrap(), tx, lsp_tx);
+
+        let effects = app.editor.dispatch(Action::ShowKeys, None);
+        app.apply_effects_for_test(effects);
+        // Scope to the NORMAL section: visual mode binds `x` too, and only the
+        // normal-mode one was removed.
+        use crate::help::HelpRow;
+        let help = app.help.as_ref().unwrap();
+        let mut in_normal = false;
+        let mut normal: Vec<String> = Vec::new();
+        for row in &help.rows {
+            match row {
+                HelpRow::Mode(label) => in_normal = *label == "NORMAL",
+                HelpRow::Binding { keys, action, .. } if in_normal => {
+                    normal.push(format!("{keys}={action}"))
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            normal.contains(&"zz=join_lines".to_string()),
+            "user binding missing"
+        );
+        assert!(
+            !normal.iter().any(|b| b.starts_with("x=")),
+            "a binding removed with `nop` must not be listed: {normal:?}"
+        );
     }
 
     #[test]

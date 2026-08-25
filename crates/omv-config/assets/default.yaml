@@ -96,6 +96,7 @@ keys:
     "<leader>fg": find_text
     "<leader>fb": find_buffers
     "<leader>d": toggle_diagnostics
+    "<leader>?": show_keys
 
     # lsp
     K: lsp_hover
