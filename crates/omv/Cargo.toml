@@ -9,11 +9,11 @@ license.workspace = true
 anyhow.workspace = true
 clap = { version = "4.6.6", features = ["derive"] }
 crossterm = "0.29.0"
-omv-config = { version = "0.1.0", path = "../omv-config" }
-omv-core = { version = "0.1.0", path = "../omv-core" }
-omv-find = { version = "0.1.0", path = "../omv-find" }
-omv-lsp = { version = "0.1.0", path = "../omv-lsp" }
-omv-syntax = { version = "0.1.0", path = "../omv-syntax" }
+omv-config.workspace = true
+omv-core.workspace = true
+omv-find.workspace = true
+omv-lsp.workspace = true
+omv-syntax.workspace = true
 ratatui = "0.30.2"
 tracing.workspace = true
 tracing-subscriber = "0.3.23"

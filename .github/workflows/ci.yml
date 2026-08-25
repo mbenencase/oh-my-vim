@@ -1,0 +1,78 @@
+name: CI
+
+# Pull requests only. Pushes to main are verified by the release workflow,
+# which runs the same three checks before it is allowed to cut a version --
+# duplicating them here would double every merge's CI minutes for no signal.
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: fmt + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace
+
+  commit-messages:
+    name: conventional commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The release workflow derives the version bump from commit subjects, so
+      # a PR that says nothing releasable silently produces no release. Surface
+      # that at review time instead of leaving it to be noticed after the merge.
+      #
+      # Which subjects survive the merge depends on the strategy -- a squash
+      # merge lands the PR *title*, a merge commit lands the branch's own
+      # commits -- so accept either and never fail the build over it. A
+      # docs-only PR is a legitimate no-release.
+      - name: Check that something in this PR is releasable
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          releasable_re='^(feat|fix|perf|revert)(\([^)]*\))?!?: .'
+          known_re='^(feat|fix|perf|revert|docs|style|refactor|test|build|ci|chore)(\([^)]*\))?!?: .'
+
+          releasable=0
+          [[ "$PR_TITLE" =~ $releasable_re ]] && releasable=1
+          [[ "$PR_TITLE" =~ $known_re ]] || \
+            echo "::warning::PR title is not a conventional commit -- a squash merge would land it verbatim: $PR_TITLE"
+
+          while IFS= read -r subject; do
+            [[ "$subject" =~ $releasable_re ]] && releasable=1
+            [[ "$subject" =~ $known_re ]] || \
+              echo "::warning::Not a conventional commit: $subject"
+          done < <(git log --format=%s --no-merges "origin/${BASE_REF}..HEAD")
+
+          if [[ "$releasable" == 0 ]]; then
+            echo "::warning::Nothing here is releasable (no feat/fix/perf/revert). Merging this will not cut a new version."
+          else
+            echo "Releasable change detected -- merging this will cut a new version."
+          fi
