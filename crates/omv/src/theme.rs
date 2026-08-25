@@ -20,6 +20,9 @@ pub struct Theme {
     pub panel_border: Color,
     pub panel_title: Color,
     pub match_highlight: Color,
+    /// Background for find-and-replace hits. A dimmed `match_highlight`, so the
+    /// one under the cursor still reads as *the* match against the rest.
+    pub search_match: Color,
     pub directory: Color,
     pub error: Color,
     pub warning: Color,
@@ -63,6 +66,7 @@ impl Theme {
             panel_border: Color::Rgb(0x58, 0x9e, 0xd7),
             panel_title: Color::Rgb(0x82, 0xaa, 0xff),
             match_highlight: Color::Rgb(0xff, 0xc7, 0x77),
+            search_match: Color::Rgb(0x5a, 0x42, 0x1c),
             directory: Color::Rgb(0x82, 0xaa, 0xff),
             error: Color::Rgb(0xff, 0x75, 0x7f),
             warning: Color::Rgb(0xff, 0xc7, 0x77),

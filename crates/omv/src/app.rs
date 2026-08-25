@@ -4,7 +4,7 @@ use std::sync::mpsc::Sender;
 
 use crossterm::event::{Event as CrossEvent, KeyCode as CtKey, KeyEvent};
 use omv_config::{Config, Resolve, Resolver};
-use omv_core::{Editor, Effect, LspIntent, Mode, Picker as PickerRequest};
+use omv_core::{Editor, Effect, LspIntent, Mode, Picker as PickerRequest, SubstituteScope};
 use omv_find::{display_path, walk_files};
 use omv_lsp::lsp_types::Diagnostic;
 use omv_lsp::{Client as LspClient, LspPosition, Notification, Registry, Request as LspRequest};
@@ -14,6 +14,7 @@ use crate::event::{AppEvent, to_key};
 use crate::explorer::Explorer;
 use crate::help::Help;
 use crate::picker::{Item, Payload, Picker, PickerKind};
+use crate::substitute::{Field, Substitute};
 use crate::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,6 +23,7 @@ pub enum Focus {
     Explorer,
     Picker,
     Help,
+    Substitute,
 }
 
 pub struct App {
@@ -33,6 +35,10 @@ pub struct App {
     pub explorer: Explorer,
     pub picker: Option<Picker>,
     pub help: Option<Help>,
+    pub substitute: Option<Substitute>,
+    /// Char ranges of the current find-and-replace pattern, so the renderer can
+    /// paint them. Empty whenever the prompt is closed.
+    pub match_ranges: Vec<std::ops::Range<usize>>,
     pub diagnostics: HashMap<PathBuf, Vec<Diagnostic>>,
     pub diagnostics_visible: bool,
     pub hover: Option<String>,
@@ -72,6 +78,8 @@ impl App {
             explorer: Explorer::new(root.clone()),
             picker: None,
             help: None,
+            substitute: None,
+            match_ranges: Vec::new(),
             diagnostics: HashMap::new(),
             diagnostics_visible: false,
             hover: None,
@@ -131,6 +139,7 @@ impl App {
         self.hover = None;
         match self.focus {
             Focus::Help => self.handle_help_key(key),
+            Focus::Substitute => self.handle_substitute_key(key),
             Focus::Picker => self.handle_picker_key(key),
             Focus::Explorer => self.handle_explorer_key(key),
             Focus::Editor => self.handle_editor_key(key),
@@ -290,6 +299,139 @@ impl App {
         }
     }
 
+    // ---- find & replace -----------------------------------------------------
+
+    fn handle_substitute_key(&mut self, key: KeyEvent) {
+        let Some(panel) = &mut self.substitute else {
+            self.focus = Focus::Editor;
+            return;
+        };
+        let ctrl = key
+            .modifiers
+            .contains(crossterm::event::KeyModifiers::CONTROL);
+
+        match key.code {
+            CtKey::Esc => self.close_substitute(),
+            // The one binding this whole feature hangs on: reveal the second
+            // field and move there, from whichever field you were in.
+            CtKey::Char('s') if ctrl => {
+                panel.replace_open = true;
+                panel.field = Field::Replace;
+            }
+            CtKey::Char('a') if ctrl => self.run_substitute(SubstituteScope::All),
+            CtKey::Char('n') if ctrl => self.step_match(true),
+            CtKey::Char('p') if ctrl => self.step_match(false),
+            CtKey::Down => self.step_match(true),
+            CtKey::Up => self.step_match(false),
+            CtKey::Tab | CtKey::BackTab => {
+                if panel.replace_open {
+                    panel.field = panel.field.other();
+                }
+            }
+            // Before there is a replacement to apply, <CR> is just "next match".
+            CtKey::Enter => {
+                if panel.replace_open {
+                    self.run_substitute(SubstituteScope::Next)
+                } else {
+                    self.step_match(true)
+                }
+            }
+            CtKey::Backspace => {
+                let searching = panel.field == Field::Find;
+                if panel.active_mut().pop().is_none() && searching {
+                    // Backspacing past the start of an empty prompt closes it,
+                    // the way the `:` line does.
+                    self.close_substitute();
+                } else if searching {
+                    self.after_find_change();
+                }
+            }
+            CtKey::Char(c) if !ctrl => {
+                let searching = panel.field == Field::Find;
+                panel.active_mut().push(c);
+                if searching {
+                    self.after_find_change();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn open_substitute(&mut self) {
+        let origin = self.editor.buffer().cursor;
+        // Seed the find field from the last search, so `/foo` then `<C-f>` picks
+        // up where you left off instead of asking you to retype it.
+        let mut panel = Substitute::new(origin);
+        panel.find = self.editor.last_search.clone();
+        self.substitute = Some(panel);
+        self.focus = Focus::Substitute;
+        self.after_find_change();
+    }
+
+    fn close_substitute(&mut self) {
+        if let Some(panel) = self.substitute.take()
+            && !panel.edited
+        {
+            let buf = self.editor.buffer_mut();
+            buf.cursor = panel.origin.min(buf.rope.len_chars());
+            buf.clamp_cursor(false);
+        }
+        self.match_ranges.clear();
+        self.focus = Focus::Editor;
+        self.scroll_to_cursor();
+    }
+
+    /// Re-count the matches and preview the first one from `origin`.
+    fn after_find_change(&mut self) {
+        let Some(panel) = &self.substitute else {
+            return;
+        };
+        let (pattern, origin) = (panel.find.clone(), panel.origin);
+        self.match_ranges = self.editor.find_matches(&pattern);
+        if !self.match_ranges.is_empty() {
+            let effects = self.editor.goto_match(&pattern, origin, true);
+            self.apply_effects(effects);
+        }
+    }
+
+    fn step_match(&mut self, forward: bool) {
+        let Some(panel) = &self.substitute else {
+            return;
+        };
+        let pattern = panel.find.clone();
+        let cursor = self.editor.buffer().cursor;
+        // Step off the match we are sitting on, or `next` would find it again.
+        let from = if forward { cursor + 1 } else { cursor };
+        let effects = self.editor.goto_match(&pattern, from, forward);
+        self.apply_effects(effects);
+        self.sync_origin();
+    }
+
+    fn run_substitute(&mut self, scope: SubstituteScope) {
+        let Some(panel) = &self.substitute else {
+            return;
+        };
+        let (find, replace) = (panel.find.clone(), panel.replace.clone());
+        let effects = self.editor.substitute(&find, &replace, scope);
+        let edited = effects
+            .iter()
+            .any(|e| matches!(e, Effect::BufferChanged { .. }));
+        self.apply_effects(effects);
+        self.match_ranges = self.editor.find_matches(&find);
+        if let Some(panel) = &mut self.substitute {
+            panel.edited |= edited;
+        }
+        self.sync_origin();
+    }
+
+    /// Anchor the next search at where the cursor actually ended up.
+    fn sync_origin(&mut self) {
+        let cursor = self.editor.buffer().cursor;
+        if let Some(panel) = &mut self.substitute {
+            panel.origin = cursor;
+        }
+    }
+
     fn activate_payload(&mut self, payload: Payload) {
         match payload {
             Payload::File(path) => self.open_path(&path),
@@ -349,6 +491,7 @@ impl App {
                     self.focus = Focus::Help;
                 }
                 Effect::OpenPicker(kind) => self.open_picker(kind),
+                Effect::OpenSubstitute => self.open_substitute(),
                 Effect::Lsp(intent) => self.send_lsp(intent),
                 Effect::Quit { force } => {
                     let unsaved = self.editor.buffers.iter().filter(|b| b.modified).count();

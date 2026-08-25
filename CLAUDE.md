@@ -13,7 +13,7 @@ that matter when *changing* the code.
 
 ```bash
 cargo build --workspace
-cargo test --workspace          # 43 tests, all fast; no language server needed
+cargo test --workspace          # 61 tests, all fast; no language server needed
 cargo run -p omv -- src/main.rs # open the editor on a file
 cargo run -p omv -- --list-actions   # every bindable action + description
 cargo run -p omv -- --list-keys      # the keymap after config merge
@@ -45,7 +45,7 @@ expecting to interact; use the headless `TestBackend` tests in
    current-thread tokio runtime; the outside world talks to it over
    `std::sync::mpsc`. No other crate depends on tokio, and none should.
 
-Crate map: `omv-core` (rope/modes/motions/text objects/undo/`Action`) ·
+Crate map: `omv-core` (rope/modes/motions/text objects/find-replace/undo/`Action`) ·
 `omv-config` (key notation → keymap trie, YAML merge) · `omv-syntax` (tree-sitter
 → flat spans) · `omv-find` (walk/fuzzy/grep, all blocking, called from workers) ·
 `omv-lsp` (JSON-RPC client) · `omv` (ratatui UI, event loop, panels).
@@ -83,8 +83,11 @@ deliberate, don't soften it to a silent skip.
 - **Prefix bindings have no timeout.** If `d` and `dd` are both bound, `d` only
   fires when a non-matching key arrives (`Resolver::feed`, `keymap.rs`). The
   default keymap avoids such pairs; keep it that way until `timeoutlen` exists.
-- **Panels are not modes.** Explorer/picker/help capture keys at the UI layer via
-  `Focus` in `app.rs` and never enter `Mode`. `Mode` describes buffer input only.
+- **Panels are not modes.** Explorer/picker/help/substitute capture keys at the
+  UI layer via `Focus` in `app.rs` and never enter `Mode`. `Mode` describes buffer
+  input only. The substitute prompt is the one that also *edits*: it calls
+  `Editor::substitute` and drains the effects like any other caller, so the
+  replacement still goes through the core's undo transactions.
 - **Full-document sync.** Both tree-sitter and LSP re-read the whole buffer on
   every `Effect::BufferChanged`. Fine at current scale; incremental is future work
   and `omv-syntax::Highlighter::highlight` is the single place it would land.

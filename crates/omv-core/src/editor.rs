@@ -4,6 +4,7 @@ use crate::action::Action;
 use crate::buffer::{Buffer, Position};
 use crate::mode::Mode;
 use crate::movement as mv;
+use crate::substitute::{self, Scope as SubstituteScope};
 use crate::textobject::{self, ObjectKind, Scope};
 
 /// What the UI layer must do after a dispatch. The core never opens a panel,
@@ -21,6 +22,8 @@ pub enum Effect {
     ToggleDiagnostics,
     /// Show the key-binding reference.
     ShowKeys,
+    /// Open the find-and-replace prompt.
+    OpenSubstitute,
     OpenPicker(Picker),
     Lsp(LspIntent),
     /// Show a message on the status line.
@@ -627,6 +630,7 @@ impl Editor {
             }
             Action::SearchNext => self.search(true),
             Action::SearchPrev => self.search(false),
+            Action::Substitute => vec![Effect::OpenSubstitute],
             Action::LspHover => vec![Effect::Lsp(LspIntent::Hover(
                 self.buffer().cursor_position(),
             ))],
@@ -754,6 +758,96 @@ impl Editor {
             }
             None => vec![Effect::Status(format!("pattern not found: {needle}"))],
         }
+    }
+
+    // ---- find & replace -----------------------------------------------------
+
+    /// Every occurrence of `pattern` in the current buffer, as char ranges.
+    /// The UI uses this to count matches and paint them.
+    pub fn find_matches(&self, pattern: &str) -> Vec<std::ops::Range<usize>> {
+        substitute::matches(self.buffer(), pattern)
+    }
+
+    /// Put the cursor on the match reached by travelling `forward` from char
+    /// index `from`, wrapping at the ends. Nothing is edited.
+    ///
+    /// The pattern is recorded as the last search, so `n`/`N` keep walking the
+    /// same matches once the prompt is closed.
+    pub fn goto_match(&mut self, pattern: &str, from: usize, forward: bool) -> Vec<Effect> {
+        if pattern.is_empty() {
+            return vec![];
+        }
+        self.last_search = pattern.to_string();
+        let matches = self.find_matches(pattern);
+        let Some(index) = substitute::nearest(&matches, from, forward) else {
+            return vec![Effect::Status(format!("pattern not found: {pattern}"))];
+        };
+        let buf = self.buffer_mut();
+        buf.cursor = matches[index].start;
+        buf.goal_column = None;
+        vec![Effect::ScrollToCursor]
+    }
+
+    /// Replace `pattern` with `replacement`, either at the single match under or
+    /// after the cursor or throughout the buffer.
+    ///
+    /// An empty `replacement` is legitimate — that is how you delete every
+    /// occurrence — so only an empty *pattern* is refused.
+    pub fn substitute(
+        &mut self,
+        pattern: &str,
+        replacement: &str,
+        scope: SubstituteScope,
+    ) -> Vec<Effect> {
+        if pattern.is_empty() {
+            return vec![Effect::Status("nothing to replace".into())];
+        }
+        let matches = self.find_matches(pattern);
+        if matches.is_empty() {
+            return vec![Effect::Status(format!("pattern not found: {pattern}"))];
+        }
+        let buffer = self.current;
+        let width = replacement.chars().count();
+
+        let replaced = match scope {
+            SubstituteScope::Next => {
+                let from = self.buffer().cursor;
+                let index =
+                    substitute::nearest(&matches, from, true).expect("matches is not empty");
+                let range = matches[index].clone();
+                let buf = self.buffer_mut();
+                buf.begin_transaction();
+                buf.replace(range.clone(), replacement);
+                // Land *past* the replacement, so pressing again walks forward
+                // even when the replacement itself contains the pattern.
+                buf.cursor = range.start + width;
+                buf.clamp_cursor(false);
+                buf.commit_transaction();
+                1
+            }
+            SubstituteScope::All => {
+                let buf = self.buffer_mut();
+                buf.begin_transaction();
+                // Back to front: replacing an early match would shift every
+                // range recorded after it.
+                for range in matches.iter().rev() {
+                    buf.replace(range.clone(), replacement);
+                }
+                // The first match starts before every edit, so its start index
+                // survives them all — a stable place to show the result from.
+                buf.cursor = matches[0].start;
+                buf.clamp_cursor(false);
+                buf.commit_transaction();
+                matches.len()
+            }
+        };
+
+        let noun = if replaced == 1 { "match" } else { "matches" };
+        vec![
+            Effect::BufferChanged { buffer },
+            Effect::ScrollToCursor,
+            Effect::Status(format!("replaced {replaced} {noun}")),
+        ]
     }
 
     /// Run whatever is sitting in the `:` (or `/`) prompt.
