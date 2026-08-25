@@ -135,6 +135,7 @@ actions! {
     SearchForward         => "search_forward",            "Panels",          "In-buffer search prompt";
     SearchNext            => "search_next",               "Panels",          "Next search match";
     SearchPrev            => "search_prev",               "Panels",          "Previous search match";
+    Substitute            => "substitute",                "Panels",          "Find and replace text in this buffer";
     ToggleDiagnostics     => "toggle_diagnostics",        "Panels",          "Show/hide the diagnostics panel";
     ShowKeys              => "show_keys",                 "Panels",          "Show every key binding and what it does";
 

@@ -87,6 +87,7 @@ keys:
     "/": search_forward
     n: search_next
     N: search_prev
+    "<C-f>": substitute
 
     # panels
     "<leader>e": toggle_explorer

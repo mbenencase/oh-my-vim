@@ -10,11 +10,14 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::app::{App, Focus};
 use crate::help::HelpRow;
+use crate::substitute::Field;
 use crate::theme::Theme;
 
 const EXPLORER_WIDTH: u16 = 30;
 const DIAGNOSTICS_HEIGHT: u16 = 8;
 const SIGN_WIDTH: usize = 2;
+/// Width of the `find  ` / `with  ` labels in the substitute prompt.
+const LABEL_WIDTH: u16 = 6;
 
 /// Severity order for "worst on this line wins". `DiagnosticSeverity`'s inner
 /// value is private, so the ranking is spelled out rather than derived.
@@ -68,6 +71,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     if app.help.is_some() {
         render_help(frame, app, body);
     }
+    if app.substitute.is_some() {
+        render_substitute(frame, app, body);
+    }
     if app.hover.is_some() {
         render_hover(frame, app, text_area);
     }
@@ -99,6 +105,8 @@ fn render_text(frame: &mut Frame, app: &App, area: Rect) {
 
     let selection = buffer.selection_range(app.editor.mode == Mode::VisualLine);
     let diagnostics = app.current_diagnostics();
+    // The hit the cursor sits on is "the current one" — replacing acts on it.
+    let current_match = omv_core::substitute::containing(&app.match_ranges, buffer.cursor);
 
     let mut lines: Vec<Line> = Vec::with_capacity(area.height as usize);
     let mut cursor_screen: Option<(u16, u16)> = None;
@@ -186,6 +194,13 @@ fn render_text(frame: &mut Frame, app: &App, area: Rect) {
                 style = style.bg(theme.selection);
             } else if line_index == cursor_line {
                 style = style.bg(theme.cursor_line);
+            }
+            if let Some(hit) = omv_core::substitute::containing(&app.match_ranges, char_idx) {
+                style = if Some(hit) == current_match {
+                    style.fg(theme.status_bg).bg(theme.match_highlight)
+                } else {
+                    style.bg(theme.search_match)
+                };
             }
 
             if char_idx == buffer.cursor {
@@ -398,6 +413,79 @@ fn render_picker(frame: &mut Frame, app: &App, area: Rect) {
         Text::from(rows)
     };
     frame.render_widget(Paragraph::new(body), list_area);
+}
+
+/// The find-and-replace prompt: docked top-right so the text it is about to
+/// change stays visible underneath it.
+fn render_substitute(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(panel) = &app.substitute else { return };
+    let theme = &app.theme;
+
+    // Borders, the find field, the hint row, and the reply field once it exists.
+    let rows = 4 + u16::from(panel.replace_open);
+    let width = area.width.saturating_sub(4).clamp(24, 54);
+    let height = rows.min(area.height);
+    let popup = Rect {
+        x: area.x + area.width.saturating_sub(width + 2),
+        y: area.y,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, popup);
+
+    let count = app.match_ranges.len();
+    let current = omv_core::substitute::containing(&app.match_ranges, app.editor.buffer().cursor);
+    let title = match (panel.find.is_empty(), count, current) {
+        (true, _, _) => " Find & Replace ".to_string(),
+        (false, 0, _) => " Find & Replace · no matches ".to_string(),
+        (false, n, Some(i)) => format!(" Find & Replace · {}/{n} ", i + 1),
+        (false, 1, None) => " Find & Replace · 1 match ".to_string(),
+        (false, n, None) => format!(" Find & Replace · {n} matches "),
+    };
+    let block = panel_block(theme, &title, true);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    if inner.height == 0 {
+        return;
+    }
+
+    let label = |text: &'static str, active: bool| {
+        Span::styled(
+            text,
+            if active {
+                Style::default()
+                    .fg(theme.panel_title)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.gutter)
+            },
+        )
+    };
+    let value = |text: &str| Span::styled(text.to_string(), Style::default().fg(theme.foreground));
+
+    let mut lines = vec![Line::from(vec![
+        label("find  ", panel.field == Field::Find),
+        value(&panel.find),
+    ])];
+    if panel.replace_open {
+        lines.push(Line::from(vec![
+            label("with  ", panel.field == Field::Replace),
+            value(&panel.replace),
+        ]));
+    }
+    lines.push(Line::from(Span::styled(
+        panel.hint(),
+        Style::default().fg(theme.gutter),
+    )));
+    frame.render_widget(Paragraph::new(Text::from(lines)), inner);
+
+    // The prompt owns the terminal cursor while it has focus; the buffer view
+    // leaves it unset for any focus but its own.
+    let row = u16::from(panel.field == Field::Replace);
+    let column = LABEL_WIDTH + panel.active().chars().count() as u16;
+    if row < inner.height && column < inner.width {
+        frame.set_cursor_position((inner.x + column, inner.y + row));
+    }
 }
 
 fn render_help(frame: &mut Frame, app: &App, area: Rect) {

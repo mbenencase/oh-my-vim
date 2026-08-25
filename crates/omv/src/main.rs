@@ -3,6 +3,7 @@ mod event;
 mod explorer;
 mod help;
 mod picker;
+mod substitute;
 mod theme;
 mod ui;
 
@@ -332,6 +333,156 @@ mod tests {
         assert!(
             !normal.iter().any(|b| b.starts_with("x=")),
             "a binding removed with `nop` must not be listed: {normal:?}"
+        );
+    }
+
+    fn press_ctrl(app: &mut App, c: char) {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        app.handle_event(AppEvent::Input(crossterm::event::Event::Key(
+            KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL),
+        )));
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for c in text.chars() {
+            press(app, crossterm::event::KeyCode::Char(c));
+        }
+    }
+
+    /// An app holding one scratch buffer of `text`, cursor at the top.
+    fn app_with_text(text: &str) -> App {
+        let mut app = test_app();
+        app.editor.buffer_mut().insert(0, text);
+        app.editor.buffer_mut().cursor = 0;
+        app
+    }
+
+    #[test]
+    fn ctrl_f_opens_the_find_prompt_through_the_default_keymap() {
+        let mut app = app_with_text("foo bar\n");
+        press_ctrl(&mut app, 'f');
+        assert_eq!(app.focus, Focus::Substitute, "<C-f> must open the prompt");
+        let out = screen(&mut app);
+        assert!(
+            out.contains("Find & Replace"),
+            "prompt must be framed:\n{out}"
+        );
+        assert!(
+            out.contains("find"),
+            "the find field must be labelled:\n{out}"
+        );
+        assert!(
+            !out.contains("with"),
+            "the replacement field stays hidden until <C-s>:\n{out}"
+        );
+    }
+
+    #[test]
+    fn typing_a_pattern_counts_and_jumps_to_the_matches() {
+        let mut app = app_with_text("alpha\nbeta\nalpha\n");
+        press_ctrl(&mut app, 'f');
+        type_text(&mut app, "alpha");
+        assert_eq!(app.match_ranges.len(), 2, "both matches must be found");
+        assert_eq!(app.editor.buffer().cursor, 0, "preview lands on the first");
+
+        press_ctrl(&mut app, 'n');
+        assert_eq!(app.editor.buffer().cursor, 11, "<C-n> walks to the next");
+        let out = screen(&mut app);
+        assert!(out.contains("2/2"), "the prompt must count matches:\n{out}");
+    }
+
+    #[test]
+    fn ctrl_s_reveals_the_replacement_field_and_routes_typing_there() {
+        let mut app = app_with_text("foo\n");
+        press_ctrl(&mut app, 'f');
+        type_text(&mut app, "foo");
+        press_ctrl(&mut app, 's');
+        type_text(&mut app, "bar");
+
+        let panel = app.substitute.as_ref().expect("prompt open");
+        assert_eq!(panel.find, "foo", "the pattern must not absorb the reply");
+        assert_eq!(panel.replace, "bar");
+        let out = screen(&mut app);
+        assert!(out.contains("with"), "the second field must appear:\n{out}");
+        assert!(out.contains("bar"), "and hold what was typed:\n{out}");
+    }
+
+    #[test]
+    fn enter_replaces_one_match_and_ctrl_a_replaces_the_rest() {
+        let mut app = app_with_text("foo\nfoo\nfoo\n");
+        press_ctrl(&mut app, 'f');
+        type_text(&mut app, "foo");
+        press_ctrl(&mut app, 's');
+        type_text(&mut app, "bar");
+
+        press(&mut app, crossterm::event::KeyCode::Enter);
+        assert_eq!(
+            app.editor.buffer().rope.to_string(),
+            "bar\nfoo\nfoo\n",
+            "<CR> must replace exactly one match"
+        );
+
+        press_ctrl(&mut app, 'a');
+        assert_eq!(
+            app.editor.buffer().rope.to_string(),
+            "bar\nbar\nbar\n",
+            "<C-a> must replace every remaining match"
+        );
+        assert!(
+            app.status.contains("replaced 2"),
+            "the count must reach the status line: {}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn enter_only_navigates_until_a_replacement_has_been_offered() {
+        let mut app = app_with_text("foo\nfoo\n");
+        press_ctrl(&mut app, 'f');
+        type_text(&mut app, "foo");
+        press(&mut app, crossterm::event::KeyCode::Enter);
+        assert_eq!(
+            app.editor.buffer().rope.to_string(),
+            "foo\nfoo\n",
+            "<CR> before <C-s> must not delete the match it found"
+        );
+        assert_eq!(app.editor.buffer().cursor, 4, "it walks to the next match");
+    }
+
+    #[test]
+    fn esc_closes_the_prompt_and_restores_the_cursor() {
+        let mut app = app_with_text("one\ntwo\nthree\n");
+        app.editor.buffer_mut().cursor = 4; // on `two`
+        press_ctrl(&mut app, 'f');
+        type_text(&mut app, "three");
+        assert_eq!(app.editor.buffer().cursor, 8, "preview jumped to the match");
+
+        press(&mut app, crossterm::event::KeyCode::Esc);
+        assert!(app.substitute.is_none());
+        assert_eq!(app.focus, Focus::Editor);
+        assert!(app.match_ranges.is_empty(), "highlights must be dropped");
+        assert_eq!(
+            app.editor.buffer().cursor,
+            4,
+            "an abandoned search must put the cursor back"
+        );
+    }
+
+    #[test]
+    fn esc_after_a_replacement_leaves_the_cursor_on_the_edit() {
+        let mut app = app_with_text("one\ntwo\nthree\n");
+        app.editor.buffer_mut().cursor = 0;
+        press_ctrl(&mut app, 'f');
+        type_text(&mut app, "three");
+        press_ctrl(&mut app, 's');
+        type_text(&mut app, "3");
+        press(&mut app, crossterm::event::KeyCode::Enter);
+        press(&mut app, crossterm::event::KeyCode::Esc);
+        assert_eq!(app.editor.buffer().rope.to_string(), "one\ntwo\n3\n");
+        assert_eq!(
+            app.editor.buffer().cursor_position().line,
+            2,
+            "the cursor must stay where the edit happened, not snap back"
         );
     }
 

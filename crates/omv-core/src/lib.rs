@@ -10,16 +10,19 @@ pub mod editor;
 pub mod history;
 pub mod mode;
 pub mod movement;
+pub mod substitute;
 pub mod textobject;
 
 pub use action::Action;
 pub use buffer::{Buffer, Position};
 pub use editor::{Editor, Effect, LspIntent, Picker, Register};
 pub use mode::Mode;
+pub use substitute::Scope as SubstituteScope;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::substitute::Scope as SubstituteScope;
 
     #[test]
     fn utf16_columns_account_for_surrogate_pairs() {
@@ -111,6 +114,85 @@ mod tests {
             4,
             "bare G is the last line"
         );
+    }
+
+    #[test]
+    fn substituting_once_walks_forward_through_the_matches() {
+        let mut ed = Editor::new();
+        ed.buffer_mut().rope = ropey::Rope::from_str("foo bar foo baz foo\n");
+        ed.substitute("foo", "qux", SubstituteScope::Next);
+        assert_eq!(ed.buffer().rope.to_string(), "qux bar foo baz foo\n");
+        ed.substitute("foo", "qux", SubstituteScope::Next);
+        assert_eq!(
+            ed.buffer().rope.to_string(),
+            "qux bar qux baz foo\n",
+            "the second replacement must move on, not redo the first"
+        );
+    }
+
+    #[test]
+    fn substituting_next_wraps_to_the_top_of_the_buffer() {
+        let mut ed = Editor::new();
+        ed.buffer_mut().rope = ropey::Rope::from_str("foo\nbar\n");
+        ed.buffer_mut().cursor = 5; // past the only match
+        ed.substitute("foo", "hey", SubstituteScope::Next);
+        assert_eq!(ed.buffer().rope.to_string(), "hey\nbar\n");
+    }
+
+    #[test]
+    fn substituting_all_is_one_undo_step() {
+        let mut ed = Editor::new();
+        ed.buffer_mut().rope = ropey::Rope::from_str("a x a x a\n");
+        let effects = ed.substitute("a", "bb", SubstituteScope::All);
+        assert_eq!(ed.buffer().rope.to_string(), "bb x bb x bb\n");
+        assert!(
+            effects.contains(&Effect::Status("replaced 3 matches".into())),
+            "the count must be reported: {effects:?}"
+        );
+        assert!(ed.buffer_mut().undo());
+        assert_eq!(
+            ed.buffer().rope.to_string(),
+            "a x a x a\n",
+            "one `u` must undo the whole document-wide replacement"
+        );
+    }
+
+    #[test]
+    fn substituting_with_an_empty_replacement_deletes_the_matches() {
+        let mut ed = Editor::new();
+        ed.buffer_mut().rope = ropey::Rope::from_str("keep DROP keep DROP\n");
+        ed.substitute("DROP ", "", SubstituteScope::All);
+        assert_eq!(ed.buffer().rope.to_string(), "keep keep DROP\n");
+    }
+
+    #[test]
+    fn a_missing_pattern_changes_nothing() {
+        let mut ed = Editor::new();
+        ed.buffer_mut().rope = ropey::Rope::from_str("hello\n");
+        let effects = ed.substitute("nope", "x", SubstituteScope::All);
+        assert_eq!(ed.buffer().rope.to_string(), "hello\n");
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, Effect::BufferChanged { .. })),
+            "a pattern that isn't there must not report a change: {effects:?}"
+        );
+    }
+
+    #[test]
+    fn walking_matches_leaves_the_pattern_for_n_to_continue() {
+        let mut ed = Editor::new();
+        ed.buffer_mut().rope = ropey::Rope::from_str("one two one\n");
+        ed.goto_match("one", 0, true);
+        assert_eq!(ed.buffer().cursor, 0);
+        ed.goto_match("one", 1, true);
+        assert_eq!(ed.buffer().cursor, 8);
+        assert_eq!(
+            ed.last_search, "one",
+            "the prompt's pattern must become the search `n` repeats"
+        );
+        ed.dispatch(Action::SearchNext, None);
+        assert_eq!(ed.buffer().cursor, 0, "`n` wraps back to the first match");
     }
 
     #[test]

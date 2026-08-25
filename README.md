@@ -19,10 +19,37 @@ cargo run -p omv -- src/main.rs
 | **File explorer** | docked left, lazy expansion, reveals the current file |
 | **Fuzzy finder** | files, buffers, and project-wide grep — all in-process |
 | **Search** | `/pattern`, `n`, `N` |
+| **Find & replace** | `<C-f>` prompt, `<C-s>` for the replacement, one match or the whole file |
 | **LSP** | diagnostics, hover, go-to-definition, references, formatting |
 | **Syntax** | tree-sitter (Rust, JSON) |
 | **Ex commands** | `:w :q :q! :wq :e <path> :bn :bp :42 :keys` |
 | **Key reference** | `:keys` (or `<leader>?`) lists every binding and what it does |
+
+## Find and replace
+
+`<C-f>` opens a prompt in the top-right corner. Type what you are looking for:
+every hit is highlighted as you type, the one you are on is highlighted brighter,
+and the title counts them (`3/12`). `<C-n>` and `<C-p>` walk between them.
+
+Press `<C-s>` and a second field appears for the replacement. From there:
+
+| | |
+|---|---|
+| `<CR>` | replace this match and move to the next |
+| `<C-a>` | replace **every** match in the document, as one undo step |
+| `<Tab>` | switch between the two fields |
+| `<C-n>` / `<C-p>` | next / previous match |
+| `<Esc>` | close |
+
+Until you press `<C-s>` there is nothing to replace *with*, so `<CR>` just walks
+the matches — a stray Enter can never delete the word you were only looking for.
+Closing with `<Esc>` before you have replaced anything puts the cursor back where
+it started; once you have made an edit it leaves you on it. The pattern carries
+over to `n`/`N`, and an in-flight `/pattern` search seeds the prompt when it opens.
+
+Matching is literal, not regex — a replacement that reinterprets `.` or `(` is
+too easy a way to lose a file. Project-wide regex search lives in `<leader>fg`,
+which only ever reads.
 
 ## Configuration
 
@@ -86,7 +113,7 @@ a language server anywhere near it.
       mpsc<AppEvent>                │ Action            ▲ Effect
                     ┌───────────────▼───────────────────┴───┐
                     │ omv-core   rope · modes · motions ·   │
-                    │            text objects · undo        │
+                    │    text objects · substitute · undo   │
                     └───────────────────────────────────────┘
    omv-config (YAML → keymap trie)   omv-syntax (tree-sitter)
    omv-find   (nucleo · ignore · grep)   omv-lsp (JSON-RPC over tokio)
@@ -94,7 +121,7 @@ a language server anywhere near it.
 
 | Crate | Responsibility |
 |---|---|
-| `omv-core` | Rope buffer, cursor, modes, motions, text objects, undo, the `Action` enum |
+| `omv-core` | Rope buffer, cursor, modes, motions, text objects, find & replace, undo, the `Action` enum |
 | `omv-config` | Key notation, keymap trie, config merge |
 | `omv-syntax` | tree-sitter parsing → flat highlight spans |
 | `omv-find` | File walk, fuzzy matching, grep |
@@ -115,7 +142,7 @@ Three ideas hold it together:
 ## Testing
 
 ```
-cargo test --workspace     # 38 tests
+cargo test --workspace     # 61 tests
 ```
 
 `omv-lsp` ships a mock language server (`omv-mock-lsp`) so the client's framing,
