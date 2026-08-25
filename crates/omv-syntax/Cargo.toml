@@ -7,7 +7,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-omv-core = { version = "0.1.0", path = "../omv-core" }
+omv-core.workspace = true
 streaming-iterator = "0.1.9"
 tree-sitter = "0.26.13"
 tree-sitter-json = "0.24.8"

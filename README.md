@@ -8,6 +8,18 @@ every key binding declared in one YAML file.
 cargo run -p omv -- src/main.rs
 ```
 
+## Install
+
+Grab a binary from the [latest release](https://github.com/mbenencase/oh-my-vim/releases/latest)
+— `gnu` for any mainstream distro, `musl` if its glibc is old or absent:
+
+```
+tar xzf omv-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+sudo install omv-vX.Y.Z-x86_64-unknown-linux-gnu/omv /usr/local/bin/omv
+```
+
+Or build it yourself with `make install` (release build + copy to `/usr/local/bin`).
+
 ## What works today
 
 | | |

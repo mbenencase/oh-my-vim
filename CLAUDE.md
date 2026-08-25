@@ -94,6 +94,28 @@ deliberate, don't soften it to a silent skip.
 - **No operator-pending grammar.** `dw`, `diw` etc. are discrete `Action`s, not
   `d` composed with a motion. Deliberate — a new text object needs a new action.
 
+## Releases
+
+Merging to `main` cuts the release; nothing is versioned by hand. `.github/workflows/release.yml`
+reads the [Conventional Commits](https://www.conventionalcommits.org/) since the last
+`v*` tag, bumps, tags, and publishes Linux binaries. `feat` → minor, `fix`/`perf`/`revert`
+→ patch, a `!` or a `BREAKING CHANGE:` footer → major, anything else → no release. So
+**the commit subject is the release decision** — `chore: add find and replace` ships
+nothing. `workflow_dispatch` forces a level when the subjects were wrong.
+
+The three steps are scripts, not YAML, so they can be run locally before trusting them:
+
+```bash
+.github/scripts/next-version.sh            # prints the next version, or "none"
+.github/scripts/set-version.sh 0.2.0       # writes it and refreshes Cargo.lock
+.github/scripts/release-notes.sh 0.2.0     # renders the CHANGELOG section
+```
+
+`[workspace.package] version` is the only version in the tree — every crate inherits it,
+and every internal dependency is `omv-*.workspace = true` (path, no version requirement).
+Don't put `version = "x.y.z"` back on those path deps: a `^0.1.0` requirement stops
+matching the instant the workspace reaches 0.2.0, and the release build fails on the tag.
+
 ## Tests
 
 Unit tests live in `#[cfg(test)] mod tests` inside the file they cover; the
