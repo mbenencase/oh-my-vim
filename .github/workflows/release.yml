@@ -168,7 +168,7 @@ jobs:
           name="omv-${{ needs.version.outputs.tag }}-${{ matrix.target }}"
           mkdir -p "dist/$name"
           cp "target/${{ matrix.target }}/release/omv" "dist/$name/"
-          cp README.md "dist/$name/"
+          cp README.md LICENSE "dist/$name/"
           cp examples/config.yaml "dist/$name/config.example.yaml"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
