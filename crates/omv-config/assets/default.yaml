@@ -97,6 +97,7 @@ keys:
     "<leader>fg": find_text
     "<leader>fb": find_buffers
     "<leader>d": toggle_diagnostics
+    "<C-j>": toggle_terminal
     "<leader>?": show_keys
 
     # lsp
@@ -116,6 +117,7 @@ keys:
 
   insert:
     "<Esc>": normal_mode
+    "<C-j>": toggle_terminal
     "<C-c>": normal_mode
     "<C-w>": delete_word
 

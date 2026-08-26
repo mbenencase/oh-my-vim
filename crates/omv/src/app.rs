@@ -15,6 +15,7 @@ use crate::explorer::Explorer;
 use crate::help::Help;
 use crate::picker::{Item, Payload, Picker, PickerKind};
 use crate::substitute::{Field, Substitute};
+use crate::terminal::{Terminal, encode_key};
 use crate::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +25,7 @@ pub enum Focus {
     Picker,
     Help,
     Substitute,
+    Terminal,
 }
 
 pub struct App {
@@ -36,6 +38,8 @@ pub struct App {
     pub picker: Option<Picker>,
     pub help: Option<Help>,
     pub substitute: Option<Substitute>,
+    /// The shell docked at the bottom. Outlives the panel being hidden.
+    pub terminal: Terminal,
     /// Char ranges of the current find-and-replace pattern, so the renderer can
     /// paint them. Empty whenever the prompt is closed.
     pub match_ranges: Vec<std::ops::Range<usize>>,
@@ -50,6 +54,10 @@ pub struct App {
     pub root: PathBuf,
     /// Rows available to the editor view; the renderer keeps this current.
     pub text_height: usize,
+    /// (rows, cols) inside the terminal panel, as the last frame drew it. Only
+    /// the renderer knows how big the panel is; a shell started before the
+    /// first frame uses a default until then.
+    pub terminal_size: Option<(u16, u16)>,
 
     highlighter: Highlighter,
     lsp_registry: Registry,
@@ -79,6 +87,7 @@ impl App {
             picker: None,
             help: None,
             substitute: None,
+            terminal: Terminal::default(),
             match_ranges: Vec::new(),
             diagnostics: HashMap::new(),
             diagnostics_visible: false,
@@ -89,6 +98,7 @@ impl App {
             quit: false,
             root,
             text_height: 24,
+            terminal_size: None,
             highlighter: Highlighter::new(),
             lsp_registry: Registry::with_defaults(),
             lsp: HashMap::new(),
@@ -130,6 +140,13 @@ impl App {
                     picker.set_items(items, truncated);
                 }
             }
+            AppEvent::TerminalOutput { session, bytes } => self.terminal.process(session, &bytes),
+            AppEvent::TerminalExited { session } => {
+                if self.terminal.finish(session) && self.focus == Focus::Terminal {
+                    self.focus = Focus::Editor;
+                }
+                self.status = "terminal session finished".into();
+            }
             AppEvent::Error(text) => self.status = text,
         }
     }
@@ -143,6 +160,45 @@ impl App {
             Focus::Picker => self.handle_picker_key(key),
             Focus::Explorer => self.handle_explorer_key(key),
             Focus::Editor => self.handle_editor_key(key),
+            Focus::Terminal => self.handle_terminal_key(key),
+        }
+    }
+
+    /// Everything goes to the shell except the toggle itself — without that one
+    /// exception the panel would be a keyboard trap.
+    fn handle_terminal_key(&mut self, key: KeyEvent) {
+        let ctrl = key
+            .modifiers
+            .contains(crossterm::event::KeyModifiers::CONTROL);
+        if ctrl && key.code == CtKey::Char('j') {
+            return self.toggle_terminal();
+        }
+        let Some(session) = &mut self.terminal.session else {
+            self.focus = Focus::Editor;
+            return;
+        };
+        if let Some(bytes) = encode_key(key) {
+            session.send(&bytes);
+        }
+    }
+
+    /// `<C-j>`: hide the panel if it is up, otherwise show it — reviving the
+    /// running shell with its screen intact, or starting one if the last
+    /// session ended.
+    fn toggle_terminal(&mut self) {
+        if self.terminal.visible {
+            self.terminal.hide();
+            if self.focus == Focus::Terminal {
+                self.focus = Focus::Editor;
+            }
+            return;
+        }
+        // The first frame has not sized the panel yet, so guess; the renderer
+        // corrects both the pty and the emulator before anything is drawn.
+        let size = self.terminal_size.unwrap_or(crate::terminal::DEFAULT_SIZE);
+        match self.terminal.open(&self.root, size, &self.events) {
+            Ok(()) => self.focus = Focus::Terminal,
+            Err(e) => self.status = e,
         }
     }
 
@@ -485,6 +541,7 @@ impl App {
                 Effect::ToggleDiagnostics => {
                     self.diagnostics_visible = !self.diagnostics_visible;
                 }
+                Effect::ToggleTerminal => self.toggle_terminal(),
                 Effect::ShowKeys => {
                     // Rebuilt on each open so it reflects the live keymap.
                     self.help = Some(Help::build(&self.config));

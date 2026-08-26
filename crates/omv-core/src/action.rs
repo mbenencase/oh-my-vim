@@ -137,6 +137,7 @@ actions! {
     SearchPrev            => "search_prev",               "Panels",          "Previous search match";
     Substitute            => "substitute",                "Panels",          "Find and replace text in this buffer";
     ToggleDiagnostics     => "toggle_diagnostics",        "Panels",          "Show/hide the diagnostics panel";
+    ToggleTerminal        => "toggle_terminal",           "Panels",          "Show/hide the shell docked at the bottom";
     ShowKeys              => "show_keys",                 "Panels",          "Show every key binding and what it does";
 
     // ---- lsp ----------------------------------------------------------------

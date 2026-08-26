@@ -15,6 +15,10 @@ use crate::theme::Theme;
 
 const EXPLORER_WIDTH: u16 = 30;
 const DIAGNOSTICS_HEIGHT: u16 = 8;
+/// Share of the body the terminal panel takes, and the bounds it stays within.
+const TERMINAL_SHARE: u16 = 3;
+const TERMINAL_MIN: u16 = 5;
+const TERMINAL_MAX: u16 = 20;
 const SIGN_WIDTH: usize = 2;
 /// Width of the `find  ` / `with  ` labels in the substitute prompt.
 const LABEL_WIDTH: u16 = 6;
@@ -44,11 +48,21 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         [Rect::ZERO, body]
     };
 
-    let [text_area, diagnostics_area] = if app.diagnostics_visible {
-        Layout::vertical([Constraint::Min(1), Constraint::Length(DIAGNOSTICS_HEIGHT)])
-            .areas(main_area)
+    // The terminal is docked under the editor but beside the explorer, the way
+    // an IDE panel sits: the sidebar keeps its full height.
+    let [above, terminal_area] = if app.terminal.visible {
+        let height = (main_area.height / TERMINAL_SHARE)
+            .clamp(TERMINAL_MIN, TERMINAL_MAX)
+            .min(main_area.height.saturating_sub(1));
+        Layout::vertical([Constraint::Min(1), Constraint::Length(height)]).areas(main_area)
     } else {
         [main_area, Rect::ZERO]
+    };
+
+    let [text_area, diagnostics_area] = if app.diagnostics_visible {
+        Layout::vertical([Constraint::Min(1), Constraint::Length(DIAGNOSTICS_HEIGHT)]).areas(above)
+    } else {
+        [above, Rect::ZERO]
     };
 
     // The core needs the real viewport height for half-page motions and scrolling.
@@ -61,6 +75,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_text(frame, app, text_area);
     if app.diagnostics_visible {
         render_diagnostics(frame, app, diagnostics_area);
+    }
+    if app.terminal.visible {
+        render_terminal(frame, app, terminal_area);
     }
     render_status(frame, app, status);
     render_command(frame, app, command);
@@ -328,6 +345,103 @@ fn render_diagnostics(frame: &mut Frame, app: &App, area: Rect) {
         Text::from(lines)
     };
     frame.render_widget(Paragraph::new(body), inner);
+}
+
+/// Paint the emulator's screen. The panel is also where the pty learns its
+/// size: only the renderer knows how many rows and columns the shell has.
+fn render_terminal(frame: &mut Frame, app: &mut App, area: Rect) {
+    let theme = &app.theme;
+    let focused = app.focus == Focus::Terminal;
+    let block = panel_block(theme, " Terminal ", focused);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    app.terminal_size = Some((inner.height, inner.width));
+
+    let default_fg = theme.foreground;
+    let default_bg = theme.background;
+    let Some(session) = &mut app.terminal.session else {
+        return;
+    };
+    session.resize(inner.height, inner.width);
+    let screen = session.screen();
+
+    let mut lines: Vec<Line> = Vec::with_capacity(inner.height as usize);
+    for row in 0..inner.height {
+        let mut spans: Vec<Span> = Vec::new();
+        let mut run = String::new();
+        let mut run_style: Option<Style> = None;
+        for column in 0..inner.width {
+            let Some(cell) = screen.cell(row, column) else {
+                continue;
+            };
+            // The second half of a double-width character carries no contents
+            // of its own; the first half already pushed the whole glyph.
+            if cell.is_wide_continuation() {
+                continue;
+            }
+            let mut style = Style::default()
+                .fg(terminal_color(cell.fgcolor(), default_fg))
+                .bg(terminal_color(cell.bgcolor(), default_bg));
+            if cell.inverse() {
+                style = Style::default()
+                    .fg(terminal_color(cell.bgcolor(), default_bg))
+                    .bg(terminal_color(cell.fgcolor(), default_fg));
+            }
+            if cell.bold() {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            if cell.italic() {
+                style = style.add_modifier(Modifier::ITALIC);
+            }
+            if cell.underline() {
+                style = style.add_modifier(Modifier::UNDERLINED);
+            }
+
+            if run_style != Some(style) {
+                if let Some(previous) = run_style.take() {
+                    spans.push(Span::styled(std::mem::take(&mut run), previous));
+                }
+                run_style = Some(style);
+            }
+            match cell.contents() {
+                "" => run.push(' '),
+                text => run.push_str(text),
+            }
+        }
+        if let Some(style) = run_style {
+            spans.push(Span::styled(run, style));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    let cursor = (!screen.hide_cursor()).then(|| screen.cursor_position());
+    frame.render_widget(
+        Paragraph::new(Text::from(lines)).style(Style::default().bg(default_bg)),
+        inner,
+    );
+
+    // The shell owns the cursor while the panel has focus, exactly as the
+    // buffer view owns it while the editor does.
+    if let Some((row, column)) = cursor
+        && focused
+        && row < inner.height
+        && column < inner.width
+    {
+        frame.set_cursor_position((inner.x + column, inner.y + row));
+    }
+}
+
+/// Map a terminal colour onto ratatui's, leaving the theme to say what
+/// "default" means so the panel matches the rest of the editor.
+fn terminal_color(color: vt100::Color, default: ratatui::style::Color) -> ratatui::style::Color {
+    match color {
+        vt100::Color::Default => default,
+        vt100::Color::Idx(i) => ratatui::style::Color::Indexed(i),
+        vt100::Color::Rgb(r, g, b) => ratatui::style::Color::Rgb(r, g, b),
+    }
 }
 
 fn render_picker(frame: &mut Frame, app: &App, area: Rect) {

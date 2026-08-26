@@ -34,8 +34,20 @@ Or build it yourself with `make install` (release build + copy to `/usr/local/bi
 | **Find & replace** | `<C-f>` prompt, `<C-s>` for the replacement, one match or the whole file |
 | **LSP** | diagnostics, hover, go-to-definition, references, formatting |
 | **Syntax** | tree-sitter (Rust, JSON) |
-| **Ex commands** | `:w :q :q! :wq :e <path> :bn :bp :42 :keys` |
+| **Terminal** | `<C-j>` opens a real shell docked at the bottom, VS Code style |
+| **Ex commands** | `:w :q :q! :wq :e <path> :bn :bp :42 :keys :term` |
 | **Key reference** | `:keys` (or `<leader>?`) lists every binding and what it does |
+
+## Terminal
+
+`<C-j>` opens a shell — your `$SHELL`, in the project root — docked under the
+editor. `<C-j>` again puts it away, and the shell keeps running: reopen it and
+the screen is exactly where you left it, mid-build output and all. Every key
+goes to the shell while the panel has focus, `<C-j>` being the one exception, so
+`<C-c>`, `<C-r>` and arrow-key history all behave the way they do in a terminal.
+
+End the shell (`exit`, or `<C-d>` at an empty prompt) and the panel closes with
+it; the next `<C-j>` starts a fresh one. `:term` toggles the same panel.
 
 ## Find and replace
 

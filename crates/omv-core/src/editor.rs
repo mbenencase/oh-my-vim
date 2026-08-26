@@ -20,6 +20,8 @@ pub enum Effect {
     ToggleExplorer,
     FocusExplorer,
     ToggleDiagnostics,
+    /// Show or hide the terminal panel, starting a shell if none is running.
+    ToggleTerminal,
     /// Show the key-binding reference.
     ShowKeys,
     /// Open the find-and-replace prompt.
@@ -619,6 +621,7 @@ impl Editor {
             Action::ToggleExplorer => vec![Effect::ToggleExplorer],
             Action::FocusExplorer => vec![Effect::FocusExplorer],
             Action::ToggleDiagnostics => vec![Effect::ToggleDiagnostics],
+            Action::ToggleTerminal => vec![Effect::ToggleTerminal],
             Action::ShowKeys => vec![Effect::ShowKeys],
             Action::FindFiles => vec![Effect::OpenPicker(Picker::Files)],
             Action::FindText => vec![Effect::OpenPicker(Picker::Text)],
@@ -891,6 +894,7 @@ impl Editor {
             // `!` is conventionally vim's shell-escape, so `:keys` is the real
             // name and `:!keys` is accepted as an alias rather than claiming `!`.
             "keys" | "!keys" | "map" => self.dispatch(Action::ShowKeys, None),
+            "term" | "terminal" => self.dispatch(Action::ToggleTerminal, None),
             "bn" => self.dispatch(Action::NextBuffer, None),
             "bp" => self.dispatch(Action::PrevBuffer, None),
             other => match other.parse::<usize>() {

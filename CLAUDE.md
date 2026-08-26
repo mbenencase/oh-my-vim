@@ -48,7 +48,7 @@ expecting to interact; use the headless `TestBackend` tests in
 Crate map: `omv-core` (rope/modes/motions/text objects/find-replace/undo/`Action`) ·
 `omv-config` (key notation → keymap trie, YAML merge) · `omv-syntax` (tree-sitter
 → flat spans) · `omv-find` (walk/fuzzy/grep, all blocking, called from workers) ·
-`omv-lsp` (JSON-RPC client) · `omv` (ratatui UI, event loop, panels).
+`omv-lsp` (JSON-RPC client) · `omv` (ratatui UI, event loop, panels, pty terminal).
 Dependencies flow one way: `omv` → everything; `omv-config`/`omv-syntax` →
 `omv-core`; `omv-core` → nothing in-workspace.
 
@@ -83,6 +83,14 @@ deliberate, don't soften it to a silent skip.
 - **Prefix bindings have no timeout.** If `d` and `dd` are both bound, `d` only
   fires when a non-matching key arrives (`Resolver::feed`, `keymap.rs`). The
   default keymap avoids such pairs; keep it that way until `timeoutlen` exists.
+- **The terminal owns the keyboard, minus one key.** `Focus::Terminal` forwards
+  every keypress to the pty through `terminal::encode_key`; only `<C-j>` is
+  intercepted, or the panel would be a trap. The session outlives the panel, so
+  hiding it keeps the shell and its screen; only `AppEvent::TerminalExited`
+  drops it. Output is tagged with a `SessionId` because a shell that has just
+  exited can still have bytes in flight, and they must not land on its
+  successor. The pty is sized by the *renderer* — nothing else knows how many
+  rows the panel has.
 - **Panels are not modes.** Explorer/picker/help/substitute capture keys at the
   UI layer via `Focus` in `app.rs` and never enter `Mode`. `Mode` describes buffer
   input only. The substitute prompt is the one that also *edits*: it calls

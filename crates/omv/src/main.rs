@@ -4,6 +4,7 @@ mod explorer;
 mod help;
 mod picker;
 mod substitute;
+mod terminal;
 mod theme;
 mod ui;
 
@@ -537,6 +538,138 @@ mod tests {
             "diagnostic must be listed:\n{out}"
         );
         assert!(out.contains("E1"), "status line must count errors:\n{out}");
+    }
+
+    // ---- terminal panel ----------------------------------------------------
+
+    /// Like `test_app`, but keeps the receiving end so a test can pump the
+    /// event loop by hand.
+    fn test_app_with_events() -> (App, Receiver<AppEvent>) {
+        let (tx, rx) = channel();
+        let (lsp_tx, _lsp_rx) = channel();
+        let config = Config::builtin().expect("builtin config");
+        let app = App::new(config, std::env::current_dir().unwrap(), tx, lsp_tx);
+        (app, rx)
+    }
+
+    /// Deliver whatever the shell has said, up to `deadline`, stopping early
+    /// once `done` is satisfied.
+    fn pump(app: &mut App, rx: &Receiver<AppEvent>, done: impl Fn(&App) -> bool) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            if done(app) {
+                return true;
+            }
+            match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+                Ok(event) => app.handle_event(event),
+                Err(_) => continue,
+            }
+        }
+        done(app)
+    }
+
+    #[test]
+    fn ctrl_j_opens_a_terminal_docked_at_the_bottom() {
+        let mut app = app_with_text("alpha\n");
+        press_ctrl(&mut app, 'j');
+        assert!(app.terminal.visible, "<C-j> must open the panel");
+        assert_eq!(app.focus, Focus::Terminal, "and give it the keyboard");
+
+        let out = screen(&mut app);
+        let rows: Vec<&str> = out.lines().collect();
+        let framed = rows
+            .iter()
+            .position(|row| row.contains("Terminal"))
+            .unwrap_or_else(|| panic!("the panel must be framed:\n{out}"));
+        assert!(
+            framed > rows.len() / 2,
+            "and drawn at the bottom, not the top:\n{out}"
+        );
+        assert!(
+            rows[0].contains("alpha"),
+            "the buffer must still be visible above it:\n{out}"
+        );
+    }
+
+    #[test]
+    fn the_term_command_toggles_the_same_panel() {
+        let mut app = app_with_text("alpha\n");
+        app.editor.command_line = "term".into();
+        let effects = app.editor.execute_command_line();
+        app.apply_effects_for_test(effects);
+        assert!(app.terminal.visible, ":term must open the panel too");
+        assert_eq!(app.focus, Focus::Terminal);
+    }
+
+    #[test]
+    fn ctrl_j_again_hides_the_panel_but_keeps_the_shell_running() {
+        let mut app = app_with_text("alpha\n");
+        press_ctrl(&mut app, 'j');
+        let session = app.terminal.session.as_ref().expect("a shell started").id;
+
+        press_ctrl(&mut app, 'j');
+        assert!(!app.terminal.visible, "<C-j> must close the panel");
+        assert_eq!(app.focus, Focus::Editor, "and hand the keyboard back");
+        assert!(
+            app.terminal.session.is_some(),
+            "closing the panel must not kill the shell"
+        );
+        assert!(
+            !screen(&mut app).contains("Terminal"),
+            "and it must be off the screen"
+        );
+
+        press_ctrl(&mut app, 'j');
+        assert_eq!(
+            app.terminal.session.as_ref().map(|s| s.id),
+            Some(session),
+            "reopening must show the same session, history and all"
+        );
+    }
+
+    #[test]
+    fn a_shell_that_exits_is_replaced_by_a_fresh_one() {
+        let mut app = app_with_text("alpha\n");
+        press_ctrl(&mut app, 'j');
+        let first = app.terminal.session.as_ref().expect("a shell started").id;
+
+        // What the reader thread posts when the shell has run `exit` or seen <C-d>.
+        app.handle_event(AppEvent::TerminalExited { session: first });
+        assert!(app.terminal.session.is_none(), "the session is over");
+        assert!(!app.terminal.visible, "so the panel goes away with it");
+        assert_eq!(app.focus, Focus::Editor);
+
+        press_ctrl(&mut app, 'j');
+        let second = app.terminal.session.as_ref().expect("a new shell").id;
+        assert_ne!(first, second, "<C-j> must start a fresh terminal");
+    }
+
+    #[test]
+    fn what_is_typed_in_the_panel_reaches_the_shell_and_comes_back() {
+        let (mut app, rx) = test_app_with_events();
+        press_ctrl(&mut app, 'j');
+        screen(&mut app); // sizes the pty to the panel
+
+        type_text(&mut app, "echo omv-terminal-roundtrip");
+        press(&mut app, crossterm::event::KeyCode::Enter);
+
+        let saw_output = pump(&mut app, &rx, |app| {
+            app.terminal
+                .session
+                .as_ref()
+                .is_some_and(|s| s.screen().contents().contains("omv-terminal-roundtrip"))
+        });
+        assert!(
+            saw_output,
+            "typing must reach the shell and its output must reach the screen: {:?}",
+            app.terminal.session.as_ref().map(|s| s.screen().contents())
+        );
+
+        let out = screen(&mut app);
+        assert!(
+            out.contains("omv-terminal-roundtrip"),
+            "and be drawn in the panel:\n{out}"
+        );
     }
 
     #[test]
