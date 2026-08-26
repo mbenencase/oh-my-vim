@@ -12,6 +12,7 @@ use crate::app::{App, Focus};
 use crate::help::HelpRow;
 use crate::substitute::Field;
 use crate::theme::Theme;
+use crate::window::{Axis, Window};
 
 const EXPLORER_WIDTH: u16 = 30;
 const DIAGNOSTICS_HEIGHT: u16 = 8;
@@ -51,14 +52,25 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         [main_area, Rect::ZERO]
     };
 
-    // The core needs the real viewport height for half-page motions and scrolling.
-    app.text_height = text_area.height as usize;
+    let dividers = app.windows.layout(text_area);
+    // The core needs the real viewport height for half-page motions and
+    // scrolling, and "the viewport" is now the focused window, not the screen.
+    app.text_height = app.windows.focused().area.height as usize;
     app.editor.viewport_height = app.text_height;
 
     if app.explorer.visible {
         render_explorer(frame, app, explorer_area);
     }
-    render_text(frame, app, text_area);
+    let windows: Vec<u64> = app.windows.iter().map(|w| w.id).collect();
+    for id in windows {
+        let Some(window) = app.windows.get(id) else {
+            continue;
+        };
+        render_text(frame, app, window);
+    }
+    for divider in dividers {
+        render_divider(frame, app, divider);
+    }
     if app.diagnostics_visible {
         render_diagnostics(frame, app, diagnostics_area);
     }
@@ -75,7 +87,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         render_substitute(frame, app, body);
     }
     if app.hover.is_some() {
-        render_hover(frame, app, text_area);
+        render_hover(frame, app, app.windows.focused().area);
     }
 }
 
@@ -87,14 +99,27 @@ fn char_width(c: char, column: usize, tab_width: usize) -> usize {
     }
 }
 
-fn render_text(frame: &mut Frame, app: &App, area: Rect) {
+/// Draw one window: its slice of one buffer, in its own rect, scrolled to its
+/// own place. Only the focused window shows a selection and the real cursor —
+/// the others are views, not input targets.
+fn render_text(frame: &mut Frame, app: &App, window: &Window) {
+    let area = window.area;
     if area.height == 0 || area.width == 0 {
         return;
     }
     let theme = &app.theme;
-    let buffer = app.editor.buffer();
+    let focused = window.id == app.windows.focused_id();
+    let buffer = &app.editor.buffers[window.buffer.min(app.editor.buffers.len() - 1)];
     let tab_width = app.editor.indent_width;
-    let cursor_line = buffer.cursor_position().line;
+    // The editor owns the live cursor; an unfocused window kept its own.
+    let cursor = if focused {
+        buffer.cursor
+    } else {
+        window.cursor
+    };
+    let cursor_line = buffer.char_to_position(cursor).line;
+    let highlights = app.highlights_for(window.buffer);
+    let scroll = window.scroll;
 
     let total_lines = buffer.line_count();
     let number_width = match app.config.line_numbers {
@@ -103,16 +128,19 @@ fn render_text(frame: &mut Frame, app: &App, area: Rect) {
     };
     let gutter_width = number_width + SIGN_WIDTH;
 
-    let selection = buffer.selection_range(app.editor.mode == Mode::VisualLine);
-    let diagnostics = app.current_diagnostics();
+    let selection = focused
+        .then(|| buffer.selection_range(app.editor.mode == Mode::VisualLine))
+        .flatten();
+    let diagnostics = app.diagnostics_for(buffer);
     // The hit the cursor sits on is "the current one" — replacing acts on it.
-    let current_match = omv_core::substitute::containing(&app.match_ranges, buffer.cursor);
+    let matches: &[std::ops::Range<usize>] = if focused { &app.match_ranges } else { &[] };
+    let current_match = omv_core::substitute::containing(matches, cursor);
 
     let mut lines: Vec<Line> = Vec::with_capacity(area.height as usize);
     let mut cursor_screen: Option<(u16, u16)> = None;
 
     for row in 0..area.height as usize {
-        let line_index = app.scroll + row;
+        let line_index = scroll + row;
         if line_index >= total_lines {
             lines.push(Line::from(Span::styled(
                 "~",
@@ -175,8 +203,7 @@ fn render_text(frame: &mut Frame, app: &App, area: Rect) {
             let c = buffer.rope.char(char_idx);
             let byte = line_start_byte + buffer.rope.slice(start..char_idx).len_bytes();
 
-            let mut style = app
-                .highlights
+            let mut style = highlights
                 .binary_search_by(|s| {
                     if s.end <= byte {
                         std::cmp::Ordering::Less
@@ -187,7 +214,7 @@ fn render_text(frame: &mut Frame, app: &App, area: Rect) {
                     }
                 })
                 .ok()
-                .map(|i| theme.style_for(app.highlights[i].kind))
+                .map(|i| theme.style_for(highlights[i].kind))
                 .unwrap_or_else(|| Style::default().fg(theme.foreground));
 
             if selection.is_some_and(|(lo, hi)| (lo..hi).contains(&char_idx)) {
@@ -195,7 +222,7 @@ fn render_text(frame: &mut Frame, app: &App, area: Rect) {
             } else if line_index == cursor_line {
                 style = style.bg(theme.cursor_line);
             }
-            if let Some(hit) = omv_core::substitute::containing(&app.match_ranges, char_idx) {
+            if let Some(hit) = omv_core::substitute::containing(matches, char_idx) {
                 style = if Some(hit) == current_match {
                     style.fg(theme.status_bg).bg(theme.match_highlight)
                 } else {
@@ -203,7 +230,7 @@ fn render_text(frame: &mut Frame, app: &App, area: Rect) {
                 };
             }
 
-            if char_idx == buffer.cursor {
+            if char_idx == cursor {
                 let x = area.x + (gutter_width + column) as u16;
                 let y = area.y + row as u16;
                 cursor_screen = Some((x, y));
@@ -228,7 +255,7 @@ fn render_text(frame: &mut Frame, app: &App, area: Rect) {
         }
 
         // The cursor may sit one past the last character (end of line, insert mode).
-        if buffer.cursor == end && line_index == cursor_line {
+        if cursor == end && line_index == cursor_line {
             cursor_screen = Some((area.x + (gutter_width + column) as u16, area.y + row as u16));
         }
 
@@ -241,12 +268,31 @@ fn render_text(frame: &mut Frame, app: &App, area: Rect) {
     );
 
     if let Some((x, y)) = cursor_screen
+        && focused
         && app.focus == Focus::Editor
         && x < area.right()
         && y < area.bottom()
     {
         frame.set_cursor_position((x, y));
     }
+}
+
+/// The rule between two windows. One cell wide, so it reads as a seam rather
+/// than a frame around every view.
+fn render_divider(frame: &mut Frame, app: &App, divider: crate::window::Divider) {
+    let (glyph, count) = match divider.axis {
+        Axis::Columns => ("\u{2502}", divider.area.height),
+        Axis::Rows => ("\u{2500}", divider.area.width),
+    };
+    let style = Style::default().fg(app.theme.gutter);
+    let text = match divider.axis {
+        Axis::Columns => Text::from(vec![Line::from(Span::styled(glyph, style)); count as usize]),
+        Axis::Rows => Text::from(Line::from(Span::styled(
+            glyph.repeat(count as usize),
+            style,
+        ))),
+    };
+    frame.render_widget(Paragraph::new(text), divider.area);
 }
 
 fn render_explorer(frame: &mut Frame, app: &App, area: Rect) {
@@ -570,7 +616,7 @@ fn render_hover(frame: &mut Frame, app: &App, area: Rect) {
         .buffer()
         .cursor_position()
         .line
-        .saturating_sub(app.scroll)) as u16;
+        .saturating_sub(app.scroll())) as u16;
 
     // Prefer below the cursor, flip above when there isn't room.
     let y = if cursor_row + 1 + height <= area.height {

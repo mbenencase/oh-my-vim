@@ -6,6 +6,7 @@ mod picker;
 mod substitute;
 mod theme;
 mod ui;
+mod window;
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -537,6 +538,122 @@ mod tests {
             "diagnostic must be listed:\n{out}"
         );
         assert!(out.contains("E1"), "status line must count errors:\n{out}");
+    }
+
+    /// Run an ex command through the same path a typed `:` line takes.
+    fn ex(app: &mut App, command: &str) {
+        app.editor.command_line = command.to_string();
+        let effects = app.editor.execute_command_line();
+        app.apply_effects_for_test(effects);
+    }
+
+    #[test]
+    fn vsp_puts_two_windows_side_by_side() {
+        let mut app = app_with_text("alpha\n");
+        ex(&mut app, "vsp");
+        assert_eq!(app.windows.count(), 2, ":vsp must split the window");
+
+        let out = screen(&mut app);
+        assert!(
+            out.lines().next().unwrap().contains('\u{2502}'),
+            "a vertical rule must separate them:\n{out}"
+        );
+        let areas: Vec<_> = app.windows.iter().map(|w| w.area).collect();
+        assert_eq!(areas[0].y, areas[1].y, "side by side means the same top");
+        assert!(areas[0].x < areas[1].x, "and different left edges");
+        assert_eq!(
+            app.editor.buffers.len(),
+            1,
+            "a split is a second view, not a second buffer"
+        );
+    }
+
+    #[test]
+    fn hsp_stacks_two_windows() {
+        let mut app = app_with_text("alpha\n");
+        ex(&mut app, "hsp");
+        assert_eq!(app.windows.count(), 2);
+
+        let out = screen(&mut app);
+        assert!(
+            out.contains("\u{2500}\u{2500}\u{2500}"),
+            "a horizontal rule must separate them:\n{out}"
+        );
+        let areas: Vec<_> = app.windows.iter().map(|w| w.area).collect();
+        assert_eq!(areas[0].x, areas[1].x, "stacked means the same left edge");
+        assert!(areas[0].y < areas[1].y, "and different tops");
+    }
+
+    #[test]
+    fn each_window_keeps_its_own_place_in_the_file() {
+        let mut app = app_with_text(&"line\n".repeat(200));
+        ex(&mut app, "vsp");
+        screen(&mut app); // lays the windows out, which sizes the viewport
+
+        // Walk the new window to the bottom of the file, then go back left.
+        let effects = app.editor.dispatch(Action::MoveFileEnd, None);
+        app.apply_effects_for_test(effects);
+        let right = app.windows.focused_id();
+        assert!(app.windows.focused().scroll > 0, "the right view scrolled");
+
+        press_ctrl(&mut app, 'w');
+        press(&mut app, crossterm::event::KeyCode::Char('h'));
+        assert_ne!(app.windows.focused_id(), right, "<C-w>h must move focus");
+        assert_eq!(
+            app.windows.focused().scroll,
+            0,
+            "the window we left alone must still be at the top"
+        );
+        assert_eq!(
+            app.editor.buffer().cursor,
+            0,
+            "and the editor cursor follows the window we moved to"
+        );
+
+        press_ctrl(&mut app, 'w');
+        press(&mut app, crossterm::event::KeyCode::Char('l'));
+        assert_eq!(app.windows.focused_id(), right, "<C-w>l must come back");
+        assert_eq!(
+            app.editor.buffer().cursor_position().line,
+            199,
+            "and restore the cursor that view had"
+        );
+    }
+
+    #[test]
+    fn splits_can_show_two_different_buffers() {
+        let mut app = app_with_text("first\n");
+        ex(&mut app, "vsp");
+        app.editor.buffers.push(omv_core::Buffer::empty());
+        app.editor.buffers[1].insert(0, "second\n");
+        app.editor.current = 1;
+        app.apply_effects_for_test(vec![omv_core::Effect::ScrollToCursor]);
+
+        let out = screen(&mut app);
+        assert!(
+            out.contains("first") && out.contains("second"),
+            "each window must draw its own buffer:\n{out}"
+        );
+    }
+
+    #[test]
+    fn the_last_window_refuses_to_close_and_only_collapses_the_rest() {
+        let mut app = app_with_text("alpha\n");
+        ex(&mut app, "close");
+        assert_eq!(app.windows.count(), 1);
+        assert!(
+            app.status.contains("cannot close the last window"),
+            "closing the only window must say why it did not: {}",
+            app.status
+        );
+
+        ex(&mut app, "vsp");
+        ex(&mut app, "hsp");
+        assert_eq!(app.windows.count(), 3);
+        ex(&mut app, "close");
+        assert_eq!(app.windows.count(), 2, ":close drops one window");
+        ex(&mut app, "only");
+        assert_eq!(app.windows.count(), 1, ":only drops the rest");
     }
 
     #[test]

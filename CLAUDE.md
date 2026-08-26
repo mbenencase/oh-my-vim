@@ -48,7 +48,7 @@ expecting to interact; use the headless `TestBackend` tests in
 Crate map: `omv-core` (rope/modes/motions/text objects/find-replace/undo/`Action`) ·
 `omv-config` (key notation → keymap trie, YAML merge) · `omv-syntax` (tree-sitter
 → flat spans) · `omv-find` (walk/fuzzy/grep, all blocking, called from workers) ·
-`omv-lsp` (JSON-RPC client) · `omv` (ratatui UI, event loop, panels).
+`omv-lsp` (JSON-RPC client) · `omv` (ratatui UI, event loop, panels, window splits).
 Dependencies flow one way: `omv` → everything; `omv-config`/`omv-syntax` →
 `omv-core`; `omv-core` → nothing in-workspace.
 
@@ -83,6 +83,13 @@ deliberate, don't soften it to a silent skip.
 - **Prefix bindings have no timeout.** If `d` and `dd` are both bound, `d` only
   fires when a non-matching key arrives (`Resolver::feed`, `keymap.rs`). The
   default keymap avoids such pairs; keep it that way until `timeoutlen` exists.
+- **Windows are views, not buffers.** `crates/omv/src/window.rs` holds the split
+  tree; a `Window` remembers a buffer index, a scroll, and a cursor. The editor
+  owns exactly one live cursor, so the focused window's copy is stale until
+  focus leaves it — `App::sync_focused_window` writes it back after every effect
+  batch, and `App::focus_window` restores the incoming one. Directional focus
+  (`<C-w>l`) reads the rect the last frame gave each window, so it follows what
+  was drawn rather than re-deriving the layout.
 - **Panels are not modes.** Explorer/picker/help/substitute capture keys at the
   UI layer via `Focus` in `app.rs` and never enter `Mode`. `Mode` describes buffer
   input only. The substitute prompt is the one that also *edits*: it calls

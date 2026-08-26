@@ -34,8 +34,28 @@ Or build it yourself with `make install` (release build + copy to `/usr/local/bi
 | **Find & replace** | `<C-f>` prompt, `<C-s>` for the replacement, one match or the whole file |
 | **LSP** | diagnostics, hover, go-to-definition, references, formatting |
 | **Syntax** | tree-sitter (Rust, JSON) |
-| **Ex commands** | `:w :q :q! :wq :e <path> :bn :bp :42 :keys` |
+| **Windows** | `:vsp` / `:hsp` split the view; `<C-w>hjkl` to move between them |
+| **Ex commands** | `:w :q :q! :wq :e <path> :bn :bp :42 :keys :vsp :hsp :close :only` |
 | **Key reference** | `:keys` (or `<leader>?`) lists every binding and what it does |
+
+## Windows
+
+`:vsp` cuts the view in two side by side, `:hsp` stacks them. Both start on the
+same file at the same place, and from there each window is its own view: scroll
+or move in one and the other stays where you left it, or open a different file
+and edit both at once.
+
+| | |
+|---|---|
+| `:vsp` (`<C-w>v`) | split side by side |
+| `:hsp` (`<C-w>s`) | split top and bottom |
+| `<C-w>h` `<C-w>j` `<C-w>k` `<C-w>l` | move focus left / down / up / right |
+| `:close` (`<C-w>c`) | close this window |
+| `:only` (`<C-w>o`) | close every window but this one |
+
+Splitting the same way twice gives three even windows rather than a nested pair.
+Focus moves by geometry, so `<C-w>l` lands on whatever is actually drawn to the
+right. `:close` on the only window is refused — there would be nothing to edit.
 
 ## Find and replace
 

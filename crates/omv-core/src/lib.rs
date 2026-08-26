@@ -15,7 +15,7 @@ pub mod textobject;
 
 pub use action::Action;
 pub use buffer::{Buffer, Position};
-pub use editor::{Editor, Effect, LspIntent, Picker, Register};
+pub use editor::{Direction, Editor, Effect, LspIntent, Picker, Register, Split};
 pub use mode::Mode;
 pub use substitute::Scope as SubstituteScope;
 

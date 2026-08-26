@@ -4,7 +4,7 @@ use std::sync::mpsc::Sender;
 
 use crossterm::event::{Event as CrossEvent, KeyCode as CtKey, KeyEvent};
 use omv_config::{Config, Resolve, Resolver};
-use omv_core::{Editor, Effect, LspIntent, Mode, Picker as PickerRequest, SubstituteScope};
+use omv_core::{Editor, Effect, LspIntent, Mode, Picker as PickerRequest, Split, SubstituteScope};
 use omv_find::{display_path, walk_files};
 use omv_lsp::lsp_types::Diagnostic;
 use omv_lsp::{Client as LspClient, LspPosition, Notification, Registry, Request as LspRequest};
@@ -16,6 +16,7 @@ use crate::help::Help;
 use crate::picker::{Item, Payload, Picker, PickerKind};
 use crate::substitute::{Field, Substitute};
 use crate::theme::Theme;
+use crate::window::{Axis, WindowId, Windows};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -42,9 +43,12 @@ pub struct App {
     pub diagnostics: HashMap<PathBuf, Vec<Diagnostic>>,
     pub diagnostics_visible: bool,
     pub hover: Option<String>,
-    pub highlights: Vec<Span>,
-    /// First visible buffer line.
-    pub scroll: usize,
+    /// Syntax spans per buffer index. Kept per buffer rather than for the
+    /// current one alone: a split can show two files at once, and only the
+    /// focused buffer's text can change under us.
+    pub highlights: HashMap<usize, Vec<Span>>,
+    /// How the text area is divided, and which division has focus.
+    pub windows: Windows,
     pub status: String,
     pub quit: bool,
     pub root: PathBuf,
@@ -83,8 +87,8 @@ impl App {
             diagnostics: HashMap::new(),
             diagnostics_visible: false,
             hover: None,
-            highlights: Vec::new(),
-            scroll: 0,
+            highlights: HashMap::new(),
+            windows: Windows::new(),
             status: String::new(),
             quit: false,
             root,
@@ -101,7 +105,8 @@ impl App {
     pub fn open_path(&mut self, path: &Path) {
         match self.editor.open(path) {
             Ok(_) => {
-                self.scroll = 0;
+                self.set_scroll(0);
+                self.sync_focused_window();
                 self.refresh_highlights();
                 self.announce_to_lsp();
             }
@@ -445,6 +450,7 @@ impl App {
             Payload::Buffer(index) => {
                 if index < self.editor.buffers.len() {
                     self.editor.current = index;
+                    self.sync_focused_window();
                     self.refresh_highlights();
                     self.scroll_to_cursor();
                 }
@@ -463,8 +469,8 @@ impl App {
     fn apply_effects(&mut self, effects: Vec<Effect>) {
         for effect in effects {
             match effect {
-                Effect::BufferChanged { .. } => {
-                    self.refresh_highlights();
+                Effect::BufferChanged { buffer } => {
+                    self.refresh_highlights_for(buffer);
                     self.notify_lsp_change();
                 }
                 Effect::ScrollToCursor => self.scroll_to_cursor(),
@@ -491,6 +497,24 @@ impl App {
                     self.focus = Focus::Help;
                 }
                 Effect::OpenPicker(kind) => self.open_picker(kind),
+                Effect::SplitWindow(split) => self.split_window(split),
+                Effect::FocusWindow(direction) => {
+                    if let Some(id) = self
+                        .windows
+                        .in_direction(self.windows.focused_id(), direction)
+                    {
+                        self.focus_window(id);
+                    }
+                }
+                Effect::CloseWindow => {
+                    let id = self.windows.focused_id();
+                    if self.windows.close(id) {
+                        self.focus_window(self.windows.focused_id());
+                    } else {
+                        self.status = "E: cannot close the last window".into();
+                    }
+                }
+                Effect::OnlyWindow => self.windows.only(self.windows.focused_id()),
                 Effect::OpenSubstitute => self.open_substitute(),
                 Effect::Lsp(intent) => self.send_lsp(intent),
                 Effect::Quit { force } => {
@@ -504,6 +528,10 @@ impl App {
                 }
             }
         }
+        // Anything at all may have moved the cursor or switched the buffer —
+        // `:bn`, a jump to a definition — and the focused window is the view
+        // that just happened, so it records the result unconditionally.
+        self.sync_focused_window();
     }
 
     pub fn scroll_to_cursor(&mut self) {
@@ -512,13 +540,61 @@ impl App {
         // A three-line margin keeps context visible instead of pinning the
         // cursor to the very edge of the viewport.
         let margin = (height / 4).min(3);
-        if line < self.scroll + margin {
-            self.scroll = line.saturating_sub(margin);
-        } else if line + margin >= self.scroll + height {
-            self.scroll = (line + margin + 1).saturating_sub(height);
+        let mut scroll = self.scroll();
+        if line < scroll + margin {
+            scroll = line.saturating_sub(margin);
+        } else if line + margin >= scroll + height {
+            scroll = (line + margin + 1).saturating_sub(height);
         }
-        let max_scroll = self.editor.buffer().last_line();
-        self.scroll = self.scroll.min(max_scroll);
+        self.set_scroll(scroll.min(self.editor.buffer().last_line()));
+    }
+
+    // ---- windows ------------------------------------------------------------
+
+    /// First visible line of the focused window.
+    pub fn scroll(&self) -> usize {
+        self.windows.focused().scroll
+    }
+
+    pub fn set_scroll(&mut self, scroll: usize) {
+        self.windows.focused_mut().scroll = scroll;
+    }
+
+    /// Write the editor's live state back into the focused window. The editor
+    /// only ever holds one cursor, so a window's own copy is whatever was true
+    /// when it last had focus.
+    fn sync_focused_window(&mut self) {
+        let (buffer, cursor) = (self.editor.current, self.editor.buffer().cursor);
+        let window = self.windows.focused_mut();
+        window.buffer = buffer;
+        window.cursor = cursor;
+    }
+
+    fn split_window(&mut self, split: Split) {
+        self.sync_focused_window();
+        self.windows.split(match split {
+            Split::Vertical => Axis::Columns,
+            Split::Horizontal => Axis::Rows,
+        });
+    }
+
+    /// Move focus, parking the outgoing window's view and restoring the
+    /// incoming one's — which is what makes two views of one file independent.
+    fn focus_window(&mut self, id: WindowId) {
+        self.sync_focused_window();
+        self.windows.focus(id);
+        let Some(window) = self.windows.get(id) else {
+            return;
+        };
+        let (buffer, cursor) = (window.buffer, window.cursor);
+        if buffer < self.editor.buffers.len() {
+            self.editor.current = buffer;
+        }
+        let buf = self.editor.buffer_mut();
+        buf.cursor = cursor.min(buf.rope.len_chars());
+        buf.goal_column = None;
+        buf.clamp_cursor(false);
+        self.refresh_highlights();
     }
 
     // ---- pickers ------------------------------------------------------------
@@ -619,13 +695,25 @@ impl App {
     // ---- syntax -------------------------------------------------------------
 
     pub fn refresh_highlights(&mut self) {
-        let path = self.editor.buffer().path.clone();
-        let Some(language) = Highlighter::language_for(path.as_deref()) else {
-            self.highlights.clear();
+        self.refresh_highlights_for(self.editor.current);
+    }
+
+    fn refresh_highlights_for(&mut self, index: usize) {
+        let Some(buffer) = self.editor.buffers.get(index) else {
             return;
         };
-        let text = self.editor.buffer().rope.to_string();
-        self.highlights = self.highlighter.highlight(language, &text);
+        let Some(language) = Highlighter::language_for(buffer.path.as_deref()) else {
+            self.highlights.remove(&index);
+            return;
+        };
+        let text = buffer.rope.to_string();
+        let spans = self.highlighter.highlight(language, &text);
+        self.highlights.insert(index, spans);
+    }
+
+    /// Syntax spans for one buffer; empty for a language we cannot parse.
+    pub fn highlights_for(&self, buffer: usize) -> &[Span] {
+        self.highlights.get(&buffer).map_or(&[], Vec::as_slice)
     }
 
     // ---- lsp ----------------------------------------------------------------
@@ -791,6 +879,7 @@ impl App {
 
     fn apply_text_edits(&mut self, changes: Vec<(PathBuf, Vec<omv_lsp::lsp_types::TextEdit>)>) {
         let current = self.editor.buffer().path.clone();
+        let mut touched = Vec::new();
         for (path, mut edits) in changes {
             // An empty path means "the buffer that asked" — formatting replies
             // carry no URI of their own.
@@ -830,8 +919,11 @@ impl App {
             }
             buf.commit_transaction();
             buf.clamp_cursor(false);
+            touched.push(index);
         }
-        self.refresh_highlights();
+        for index in touched {
+            self.refresh_highlights_for(index);
+        }
         self.notify_lsp_change();
         self.scroll_to_cursor();
     }
@@ -872,8 +964,12 @@ impl App {
     }
 
     pub fn current_diagnostics(&self) -> &[Diagnostic] {
-        self.editor
-            .buffer()
+        self.diagnostics_for(self.editor.buffer())
+    }
+
+    /// Diagnostics for whichever buffer a window happens to be showing.
+    pub fn diagnostics_for(&self, buffer: &omv_core::Buffer) -> &[Diagnostic] {
+        buffer
             .path
             .as_ref()
             .and_then(|p| self.diagnostics.get(p))
