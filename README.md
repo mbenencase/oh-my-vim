@@ -35,7 +35,8 @@ Or build it yourself with `make install` (release build + copy to `/usr/local/bi
 | **LSP** | diagnostics, hover, go-to-definition, references, formatting |
 | **Syntax** | tree-sitter (Rust, JSON) |
 | **Windows** | `:vsp` / `:hsp` split the view; `<C-w>hjkl` to move between them |
-| **Ex commands** | `:w :q :q! :wq :e <path> :bn :bp :42 :keys :vsp :hsp :close :only` |
+| **Terminal** | `<C-j>` opens a real shell docked at the bottom, VS Code style |
+| **Ex commands** | `:w :q :q! :wq :e <path> :bn :bp :42 :keys :vsp :hsp :close :only :term` |
 | **Key reference** | `:keys` (or `<leader>?`) lists every binding and what it does |
 
 ## Windows
@@ -56,6 +57,18 @@ and edit both at once.
 Splitting the same way twice gives three even windows rather than a nested pair.
 Focus moves by geometry, so `<C-w>l` lands on whatever is actually drawn to the
 right. `:close` on the only window is refused — there would be nothing to edit.
+
+## Terminal
+
+`<C-j>` opens a shell — your `$SHELL`, in the project root — docked under the
+editor, spanning the width of the splits rather than cutting into them. `<C-j>`
+again puts it away, and the shell keeps running: reopen it and the screen is
+exactly where you left it, mid-build output and all. Every key goes to the shell
+while the panel has focus, `<C-j>` being the one exception, so `<C-c>`, `<C-r>`
+and arrow-key history all behave the way they do in a terminal.
+
+End the shell (`exit`, or `<C-d>` at an empty prompt) and the panel closes with
+it; the next `<C-j>` starts a fresh one. `:term` toggles the same panel.
 
 ## Find and replace
 

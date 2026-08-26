@@ -19,6 +19,15 @@ pub enum AppEvent {
         items: Vec<Item>,
         truncated: bool,
     },
+    /// Bytes a shell wrote, tagged with the session that wrote them.
+    TerminalOutput {
+        session: crate::terminal::SessionId,
+        bytes: Vec<u8>,
+    },
+    /// A shell exited, by `exit` or by `<C-d>`.
+    TerminalExited {
+        session: crate::terminal::SessionId,
+    },
     Error(String),
 }
 
