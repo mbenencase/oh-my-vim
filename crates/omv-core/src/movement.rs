@@ -38,6 +38,10 @@ pub fn right(buf: &Buffer, count: usize, past_end: bool) -> usize {
 pub fn vertical(buf: &Buffer, delta: isize, past_end: bool) -> (usize, usize) {
     let pos = buf.cursor_position();
     let goal = buf.goal_column.unwrap_or(pos.column);
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "each branch is guarded by the sign test, so neither cast can lose one"
+    )]
     let target = if delta < 0 {
         pos.line.saturating_sub((-delta) as usize)
     } else {

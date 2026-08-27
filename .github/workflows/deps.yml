@@ -1,0 +1,42 @@
+name: Dependencies
+
+# Continuous monitoring, deliberately NOT a pull-request gate.
+#
+# Advisories are published on someone else's schedule. Gating PRs on them means
+# an unrelated change is blocked by news that arrived overnight, which is how a
+# supply-chain check gets disabled. Running weekly turns the same signal into an
+# issue someone can triage.
+#
+# At install time the whole check was green: 0 advisories, 0 licence violations,
+# 0 source violations, 3 wildcard warnings (all internal path deps, see
+# deny.toml). Measured wall time: 1.15s.
+on:
+  schedule:
+    # Mondays, 07:00 UTC.
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+  # Also run when the dependency set itself changes -- that IS caused by the
+  # pull request, so it is fair to check it there.
+  pull_request:
+    paths:
+      - '**/Cargo.toml'
+      - Cargo.lock
+      - deny.toml
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check

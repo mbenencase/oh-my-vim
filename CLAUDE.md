@@ -13,7 +13,7 @@ that matter when *changing* the code.
 
 ```bash
 cargo build --workspace
-cargo test --workspace          # 61 tests, all fast; no language server needed
+cargo test --workspace          # 83 tests, all fast; no language server needed
 cargo run -p omv -- src/main.rs # open the editor on a file
 cargo run -p omv -- --list-actions   # every bindable action + description
 cargo run -p omv -- --list-keys      # the keymap after config merge
@@ -28,22 +28,58 @@ behaviour — a stray user config silently changes what the binary does.
 expecting to interact; use the headless `TestBackend` tests in
 `crates/omv/src/main.rs` instead.
 
+The checks CI runs, in the order it runs them — all four are fast enough to run
+before every commit, and `.githooks/` will do it for you:
+
+```bash
+cargo metadata --locked --format-version 1 >/dev/null  # lockfile is current
+cargo fmt --all --check                                # 0.3s
+./.github/scripts/arch-check.py                        # 0.1s, the invariants below
+cargo clippy --workspace --all-targets -- -D warnings   # ~2s after a core edit
+cargo test --workspace                                 # ~4s after a core edit
+```
+
+Enable the hooks once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Lint policy lives in `[workspace.lints]` in the root `Cargo.toml`, not in the CI
+YAML, so a local `cargo clippy` reaches the same verdict as the runner. Plain
+rustc warnings are deliberately left at warn level there — `-D warnings` is
+applied in CI only, so that `cargo build` still works mid-refactor.
+
+What regulates this repo, and why, is recorded in `.the-office/harness.md`.
+
 ## Architecture: the three rules
+
+These three, plus the keymap-sync rule below, are no longer only prose. They are
+checked by `.github/scripts/arch-check.py`, which runs in CI and in the
+pre-commit hook. If you are about to argue with one of them, the check is the
+thing to change, and changing it is a visible diff rather than a forgotten
+paragraph.
 
 1. **`omv-core` returns `Effect`s, never side effects.** `Editor::dispatch(action,
    count) -> Vec<Effect>` says it *wants* a picker opened, an LSP request sent, or
    the editor quit; `App::apply_effects` in `crates/omv/src/app.rs` decides how.
    Never reach into the terminal, filesystem-beyond-the-buffer, or a language
    server from `omv-core`. This is what keeps the whole editing model unit-testable
-   with no terminal — preserve it.
+   with no terminal — preserve it. Checked by `F3 core-purity`, which bans
+   `std::process`/`std::net`/`std::env`/stdio/tokio/crossterm/ratatui from
+   `omv-core` and allows `std::fs` only in `buffer.rs`, where load and save live.
 2. **One channel, many producers.** Input thread, LSP bridge thread, and picker
    worker threads all send `AppEvent` (`crates/omv/src/event.rs`) into a single
    `mpsc`. `event_loop` in `main.rs` blocks on `recv`, then drains `try_recv`
    before redrawing, so a paste costs one frame. Don't add polling or a second
-   receiver in the render loop.
+   receiver in the render loop. This is the one rule of the three with no
+   computational check — no cheap form of it exists that isn't mostly false
+   positives, so it rests on you.
 3. **Async lives only in `omv-lsp`.** Each server owns a thread with a
    current-thread tokio runtime; the outside world talks to it over
-   `std::sync::mpsc`. No other crate depends on tokio, and none should.
+   `std::sync::mpsc`. No other crate depends on tokio, and none should. Checked
+   by `F2 async-quarantine` against `cargo metadata`, so it fails when the
+   dependency is *declared*, not once someone imports it.
 
 Crate map: `omv-core` (rope/modes/motions/text objects/find-replace/undo/`Action`) ·
 `omv-config` (key notation → keymap trie, YAML merge) · `omv-syntax` (tree-sitter
@@ -51,7 +87,9 @@ Crate map: `omv-core` (rope/modes/motions/text objects/find-replace/undo/`Action
 `omv-lsp` (JSON-RPC client) · `omv` (ratatui UI, event loop, panels, window
 splits, pty terminal).
 Dependencies flow one way: `omv` → everything; `omv-config`/`omv-syntax` →
-`omv-core`; `omv-core` → nothing in-workspace.
+`omv-core`; `omv-core` → nothing in-workspace. Checked by `F1 dep-direction`;
+the allowed edges are listed literally in `arch-check.py`, so adding a legitimate
+one is an explicit edit.
 
 ## Adding a key binding or action
 
@@ -67,11 +105,17 @@ To add an action:
 3. If the UI must do something new, add an `Effect` variant and handle it in
    `App::apply_effects`.
 4. Bind it in **both** `crates/omv-config/assets/default.yaml` (compiled in via
-   `include_str!`) and `examples/config.yaml` — these two files are currently
-   byte-identical and must stay in sync.
+   `include_str!`) and `examples/config.yaml` — these two files are
+   byte-identical and must stay in sync. Checked by `F4 keymap-sync`, so you will
+   be told at commit time rather than by a user whose example config lacks the
+   binding.
 
 An unknown action name in YAML fails at load with a line number; that is
-deliberate, don't soften it to a silent skip.
+deliberate, don't soften it to a silent skip. The reverse direction — an action
+that exists but no key and no `:command` reaches — is caught by
+`F5 unreachable-action`. `force_quit` and `save_and_quit` are legitimately
+key-less; they are reachable as `:q!` and `:wq`, which is why the check reads
+the command table too.
 
 ## Things that bite
 
@@ -79,6 +123,13 @@ deliberate, don't soften it to a silent skip.
   columns. `Position.column` is chars too. Syntax spans are *byte* offsets; LSP
   columns are *UTF-16* units (`Buffer::utf16_column` / `from_utf16`). Three
   coordinate systems — check which one a function is in before doing arithmetic.
+  Because a silent `as` between integer widths is where that confusion hides,
+  `omv-core` (and only `omv-core`) denies the four clippy cast lints, in
+  `crates/omv-core/src/lib.rs`. A new `as` there is a compile error. The five
+  pre-existing sites are grandfathered one at a time with `#[expect(..., reason
+  = ...)]`; because `expect` un-fulfils itself once the cast goes away, the
+  grandfather list cannot quietly outlive the problem. Count what is left with
+  `grep -rn 'expect(clippy::cast' crates/omv-core/src`.
 - **Undo is transactional.** Call `begin_transaction()` before mutating; an insert
   session collapses into one `Transaction` so a single `u` undoes the burst.
 - **Prefix bindings have no timeout.** If `d` and `dd` are both bound, `d` only
@@ -119,6 +170,15 @@ reads the [Conventional Commits](https://www.conventionalcommits.org/) since the
 **the commit subject is the release decision** — `chore: add find and replace` ships
 nothing. `workflow_dispatch` forces a level when the subjects were wrong.
 
+Two features have already shipped without releasing anything this way
+(`ac06cf3`, `2863293`). So the subject line is now checked in two places: the
+`commit-msg` hook rejects an unclassifiable subject locally, and CI **fails** a
+pull request whose *title* is not a conventional commit — the title is what a
+squash merge lands, and therefore what `next-version.sh` actually reads.
+Individual commit subjects on a branch stay advisory (`::warning::`), because a
+squash rewrites them anyway. "Nothing releasable here" also stays a warning: a
+docs-only PR is a legitimate no-release.
+
 The three steps are scripts, not YAML, so they can be run locally before trusting them:
 
 ```bash
@@ -131,6 +191,12 @@ The three steps are scripts, not YAML, so they can be run locally before trustin
 and every internal dependency is `omv-*.workspace = true` (path, no version requirement).
 Don't put `version = "x.y.z"` back on those path deps: a `^0.1.0` requirement stops
 matching the instant the workspace reaches 0.2.0, and the release build fails on the tag.
+`cargo deny`'s `wildcards` check is set to "warn" rather than "deny" for exactly
+this reason — see the comment in `deny.toml`.
+
+`Cargo.lock` is checked for freshness by CI (`cargo metadata --locked`) and every
+build there is `--locked`. Commit `557dc09` exists only to fix a lockfile left
+stale by the bump in `78050ef`; that class of commit should not happen again.
 
 ## Tests
 
@@ -144,6 +210,44 @@ no real language server installed.
 Match the existing test style: names read as sentences describing the behaviour
 (`line_wise_paste_lands_on_its_own_line`), and assertions carry a short message
 explaining the rule.
+
+The count is a ratchet. **83 passing at last measurement**, and CI fails if it
+drops below that — a deleted `#[test]` is otherwise indistinguishable from a
+green run. If you remove a test deliberately, lower the floor in
+`.github/workflows/ci.yml`, `.githooks/pre-push` and `.the-office/harness.md` in
+the same commit. If you add tests, raise it. There is no coverage floor: nothing
+has measured coverage on this repo yet, and a floor without a baseline is a trap.
+
+## Rust conventions
+
+Feedforward rules — the ones a machine cannot check yet. Anything here that
+becomes checkable should move out of this list and into a sensor; see
+`.the-office/harness.md` for what already did.
+
+- **No `unwrap()`/`expect()` outside tests, `main`, and examples.** In library
+  code return `Result` and let the caller decide. There are **12 in library code
+  today** (6 in `omv-lsp/src/client.rs`, 3 in `omv/src/window.rs`, 1 each in
+  `omv/src/event.rs`, `omv-config/src/config.rs`, `omv-core/src/editor.rs`).
+  That count is a ratchet, not a clean slate: don't add the thirteenth.
+  `clippy::unwrap_used` is deliberately *not* enabled, because switching it on
+  today would fail the build on all twelve.
+- **No `unsafe`.** Not a convention — `unsafe_code = "forbid"` in
+  `[workspace.lints.rust]`, and the tree has none. `forbid` means a crate cannot
+  opt back in with an `#[allow]`.
+- **`thiserror` for libraries, `anyhow` for binaries.** Don't mix them in one
+  crate. The workspace already splits this way.
+- **Prefer borrowing to cloning.** Reach for `clone()` deliberately, and where
+  it is in a hot path (the render loop, `Highlighter::highlight`) say why.
+- **Public API takes `&str`/`&[T]` and returns owned types.** Taking `String` by
+  value at a boundary forces every caller to allocate.
+- **Newtype over primitive for domain identifiers.** This is a computational
+  guide you get for free: `struct SessionId(u64)` in `crates/omv/src/terminal.rs`
+  is why a dead shell's bytes cannot land on its successor. The three coordinate
+  systems above are the obvious next candidate and are not newtyped yet — that
+  is the biggest single harness improvement still available here, and it is a
+  refactor, not a config change.
+- **`#[must_use]` on any constructor or builder whose result being dropped is a
+  bug.**
 
 ## Style
 

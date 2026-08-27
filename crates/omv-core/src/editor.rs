@@ -229,6 +229,10 @@ impl Editor {
             Action::MoveLeft => moved!(mv::left(self.buffer(), count)),
             Action::MoveRight => moved!(mv::right(self.buffer(), count, past_end)),
             Action::MoveUp | Action::MoveDown => {
+                #[expect(
+                    clippy::cast_possible_wrap,
+                    reason = "count is a keystroke repeat count, bounded by what a human types"
+                )]
                 let delta = if action == Action::MoveUp {
                     -(count as isize)
                 } else {
@@ -257,6 +261,10 @@ impl Editor {
                 moved!(mv::goto_line(self.buffer(), line))
             }
             Action::MoveHalfPageDown | Action::MoveHalfPageUp => {
+                #[expect(
+                    clippy::cast_possible_wrap,
+                    reason = "viewport_height is a terminal row count, never near isize::MAX"
+                )]
                 let half = (self.viewport_height / 2).max(1) as isize;
                 let delta = if action == Action::MoveHalfPageUp {
                     -half

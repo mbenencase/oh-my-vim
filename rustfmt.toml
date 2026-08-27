@@ -1,0 +1,6 @@
+# Installed by the-office. Stable options only, so `cargo fmt` works on stable.
+# The pack ships edition = "2021"; this workspace is edition 2024 and rustfmt
+# must be told, or it formats against the wrong edition's rules.
+max_width = 100
+edition = "2024"
+use_field_init_shorthand = true

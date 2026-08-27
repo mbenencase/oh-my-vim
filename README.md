@@ -187,7 +187,7 @@ Three ideas hold it together:
 ## Testing
 
 ```
-cargo test --workspace     # 61 tests
+cargo test --workspace     # 83 tests
 ```
 
 `omv-lsp` ships a mock language server (`omv-mock-lsp`) so the client's framing,
@@ -199,7 +199,6 @@ server installed. The UI is tested headlessly through ratatui's `TestBackend`.
 - **Prefix bindings need a following key.** If `d` and `dd` are both bound, `d`
   only fires once a non-matching key arrives — there is no `timeoutlen` yet.
   The default keymap avoids such pairs.
-- **No splits.** One editor view with docked panels; the window tree is future work.
 - **Full-document sync.** Both tree-sitter and LSP re-read the whole buffer on
   every change. Fine to a few thousand lines; incremental is the next step.
 - **No operator-pending grammar.** `d` + motion doesn't compose — `dw`, `diw` and

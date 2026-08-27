@@ -23,3 +23,6 @@ vt100 = "0.16"
 
 [dev-dependencies]
 serde_yaml_ng = "0.10.0"
+
+[lints]
+workspace = true

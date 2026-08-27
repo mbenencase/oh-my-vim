@@ -1,10 +1,17 @@
 name: CI
 
-# Pull requests only. Pushes to main are verified by the release workflow,
-# which runs the same three checks before it is allowed to cut a version --
-# duplicating them here would double every merge's CI minutes for no signal.
+# Pull requests, plus direct pushes to the integration branch. Pushes to main
+# are verified by the release workflow, which runs the same checks before it is
+# allowed to cut a version -- duplicating them there would double every merge's
+# CI minutes for no signal.
+#
+# `development` is listed because it is where feature branches land. Before, a
+# PR was checked but the branch it merged into was not, so anything pushed
+# straight to `development` reached main unverified (`cc26b1f` did exactly that).
 on:
   pull_request:
+  push:
+    branches: [development]
   workflow_dispatch:
 
 concurrency:
@@ -27,32 +34,95 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # A stale lockfile is not hypothetical here: `557dc09` exists only to fix
+      # one left behind by the version bump in `78050ef`. `--locked` makes the
+      # next one a red PR instead of a follow-up commit.
+      - name: Lockfile is current
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
       - name: Formatting
         run: cargo fmt --all --check
 
+      # Lint *policy* now lives in Cargo.toml [workspace.lints], so a local
+      # `cargo clippy` reaches the same verdict as this step. `-D warnings` is
+      # still passed because it also promotes plain rustc warnings, which are
+      # deliberately left at warn level in the manifest so that `cargo build`
+      # keeps working mid-refactor.
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      # One run, two assertions: the suite passes, and it has not shrunk.
+      # 83 is the measured count at install time and is a ratchet, not a target
+      # -- a deleted `#[test]` is otherwise indistinguishable from a green run.
       - name: Tests
-        run: cargo test --workspace
+        run: |
+          set -o pipefail
+          cargo test --workspace --locked 2>&1 | tee /tmp/test.out
+
+          floor=83
+          count=$(sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' /tmp/test.out \
+            | awk '{s+=$1} END {print s+0}')
+          echo "passing tests: $count (floor $floor)"
+          if (( count < floor )); then
+            echo "::error::Test count fell from $floor to $count. If a test was" \
+                 "removed on purpose, lower the floor in this workflow and in" \
+                 ".the-office/harness.md in the same commit."
+            exit 1
+          fi
+          if (( count > floor )); then
+            echo "::notice::Test count is now $count, above the floor of $floor." \
+                 "Raise the ratchet in ci.yml and .the-office/harness.md."
+          fi
+
+  architecture:
+    name: architectural invariants
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # These five checks were prose in CLAUDE.md until they became executable:
+      # dependency direction, the tokio quarantine, omv-core's purity, the two
+      # keymap assets staying byte-identical, and every action being reachable.
+      # Cheap enough (~0.1s) that there is no reason for them to be a review
+      # comment instead.
+      - name: Fitness functions
+        run: ./.github/scripts/arch-check.py
 
   commit-messages:
     name: conventional commits
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # The release workflow derives the version bump from commit subjects, so
-      # a PR that says nothing releasable silently produces no release. Surface
-      # that at review time instead of leaving it to be noticed after the merge.
+      # The release workflow derives the version bump from commit subjects, so a
+      # PR that says nothing releasable silently produces no release. Two
+      # features have already shipped that way (`ac06cf3`, `2863293`).
       #
-      # Which subjects survive the merge depends on the strategy -- a squash
-      # merge lands the PR *title*, a merge commit lands the branch's own
-      # commits -- so accept either and never fail the build over it. A
-      # docs-only PR is a legitimate no-release.
-      - name: Check that something in this PR is releasable
+      # Only the PR *title* is enforced, because that is what a squash merge
+      # actually lands and therefore what the release pipeline actually reads.
+      # Individual commit subjects stay advisory: they are rewritten by a squash
+      # and failing on them would police a working branch's private history.
+      #
+      # "Nothing releasable" also stays a warning. A docs-only PR is a
+      # legitimate no-release and must not be blocked.
+      - name: PR title must be a conventional commit
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          known_re='^(feat|fix|perf|revert|docs|style|refactor|test|build|ci|chore)(\([^)]*\))?!?: .'
+          if [[ ! "$PR_TITLE" =~ $known_re ]]; then
+            echo "::error::PR title is not a conventional commit, and a squash" \
+                 "merge would land it verbatim where .github/scripts/next-version.sh" \
+                 "reads it: '$PR_TITLE'"
+            echo "Expected one of: feat|fix|perf|revert|docs|style|refactor|test|build|ci|chore"
+            exit 1
+          fi
+          echo "PR title is well formed: $PR_TITLE"
+
+      - name: Report what this PR would release
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
@@ -62,8 +132,6 @@ jobs:
 
           releasable=0
           [[ "$PR_TITLE" =~ $releasable_re ]] && releasable=1
-          [[ "$PR_TITLE" =~ $known_re ]] || \
-            echo "::warning::PR title is not a conventional commit -- a squash merge would land it verbatim: $PR_TITLE"
 
           while IFS= read -r subject; do
             [[ "$subject" =~ $releasable_re ]] && releasable=1
