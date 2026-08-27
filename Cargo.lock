@@ -1096,7 +1096,7 @@ dependencies = [
 
 [[package]]
 name = "omv"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1117,7 +1117,7 @@ dependencies = [
 
 [[package]]
 name = "omv-config"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -1129,7 +1129,7 @@ dependencies = [
 
 [[package]]
 name = "omv-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ropey",
  "serde",
@@ -1139,7 +1139,7 @@ dependencies = [
 
 [[package]]
 name = "omv-find"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "grep-regex",
@@ -1150,7 +1150,7 @@ dependencies = [
 
 [[package]]
 name = "omv-lsp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "lsp-types",
@@ -1163,7 +1163,7 @@ dependencies = [
 
 [[package]]
 name = "omv-syntax"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "omv-core",
