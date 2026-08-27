@@ -4,6 +4,21 @@
 //! everything here is synchronous and unit-testable. The UI layer feeds it
 //! [`Action`]s and drains the [`Effect`]s it hands back.
 
+// Three coordinate systems meet in this crate: `Buffer::cursor` and
+// `Position.column` are CHAR indices, syntax spans are BYTE offsets, and LSP
+// columns are UTF-16 units. Every silent `as` between integer widths is a place
+// that confusion can hide, so they are errors here and nowhere else in the
+// workspace. Existing sites are grandfathered one at a time with `#[expect]`
+// and a reason; `#[expect]` un-fulfils itself once the cast is removed, so the
+// grandfather list cannot outlive the problem. Count them:
+//     grep -rn 'expect(clippy::cast' crates/omv-core/src | wc -l
+#![deny(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss
+)]
+
 pub mod action;
 pub mod buffer;
 pub mod editor;
@@ -15,7 +30,7 @@ pub mod textobject;
 
 pub use action::Action;
 pub use buffer::{Buffer, Position};
-pub use editor::{Editor, Effect, LspIntent, Picker, Register};
+pub use editor::{Direction, Editor, Effect, LspIntent, Picker, Register, Split};
 pub use mode::Mode;
 pub use substitute::Scope as SubstituteScope;
 

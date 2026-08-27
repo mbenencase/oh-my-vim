@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+#
+# Installed by the-office. Measured at 4.35s after an omv-core edit.
+# Per-push rather than per-commit, so the cost lands rarely.
+#
+# Also enforces the test-count ratchet that CI enforces, so a shrinking suite is
+# caught before the push rather than after.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+floor=83
+
+echo "pre-push: tests"
+out=$(cargo test --workspace 2>&1) || { echo "$out"; exit 1; }
+
+count=$(sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' <<<"$out" | awk '{s+=$1} END {print s+0}')
+echo "pre-push: $count passing (floor $floor)"
+
+if (( count < floor )); then
+    echo "pre-push: test count fell from $floor to $count." >&2
+    echo "  If a test was removed on purpose, lower the floor in .githooks/pre-push," >&2
+    echo "  .github/workflows/ci.yml and .the-office/harness.md in the same commit." >&2
+    exit 1
+fi
+
+echo "pre-push: ok"

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#
+# Installed by the-office. Enable with:  git config core.hooksPath .githooks
+#
+# Everything here was measured before it was installed. On this workspace:
+#   fmt + fitness functions            0.35s
+#   + clippy, nothing touched          0.64s
+#   + clippy, after an omv-core edit   2.15s
+#
+# It checks the working tree, not the index. That is a deliberate simplification:
+# stashing to isolate staged content costs more than the checks do, and loses
+# work if the hook is interrupted.
+#
+# `git commit --no-verify` skips this. If you find yourself doing that routinely,
+# the hook is wrong -- say so rather than working around it.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+echo "pre-commit: formatting"
+cargo fmt --all --check
+
+echo "pre-commit: architectural invariants"
+./.github/scripts/arch-check.py
+
+echo "pre-commit: clippy"
+cargo clippy --workspace --all-targets -- -D warnings
+
+echo "pre-commit: ok"

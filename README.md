@@ -34,8 +34,41 @@ Or build it yourself with `make install` (release build + copy to `/usr/local/bi
 | **Find & replace** | `<C-f>` prompt, `<C-s>` for the replacement, one match or the whole file |
 | **LSP** | diagnostics, hover, go-to-definition, references, formatting |
 | **Syntax** | tree-sitter (Rust, JSON) |
-| **Ex commands** | `:w :q :q! :wq :e <path> :bn :bp :42 :keys` |
+| **Windows** | `:vsp` / `:hsp` split the view; `<C-w>hjkl` to move between them |
+| **Terminal** | `<C-j>` opens a real shell docked at the bottom, VS Code style |
+| **Ex commands** | `:w :q :q! :wq :e <path> :bn :bp :42 :keys :vsp :hsp :close :only :term` |
 | **Key reference** | `:keys` (or `<leader>?`) lists every binding and what it does |
+
+## Windows
+
+`:vsp` cuts the view in two side by side, `:hsp` stacks them. Both start on the
+same file at the same place, and from there each window is its own view: scroll
+or move in one and the other stays where you left it, or open a different file
+and edit both at once.
+
+| | |
+|---|---|
+| `:vsp` (`<C-w>v`) | split side by side |
+| `:hsp` (`<C-w>s`) | split top and bottom |
+| `<C-w>h` `<C-w>j` `<C-w>k` `<C-w>l` | move focus left / down / up / right |
+| `:close` (`<C-w>c`) | close this window |
+| `:only` (`<C-w>o`) | close every window but this one |
+
+Splitting the same way twice gives three even windows rather than a nested pair.
+Focus moves by geometry, so `<C-w>l` lands on whatever is actually drawn to the
+right. `:close` on the only window is refused — there would be nothing to edit.
+
+## Terminal
+
+`<C-j>` opens a shell — your `$SHELL`, in the project root — docked under the
+editor, spanning the width of the splits rather than cutting into them. `<C-j>`
+again puts it away, and the shell keeps running: reopen it and the screen is
+exactly where you left it, mid-build output and all. Every key goes to the shell
+while the panel has focus, `<C-j>` being the one exception, so `<C-c>`, `<C-r>`
+and arrow-key history all behave the way they do in a terminal.
+
+End the shell (`exit`, or `<C-d>` at an empty prompt) and the panel closes with
+it; the next `<C-j>` starts a fresh one. `:term` toggles the same panel.
 
 ## Find and replace
 
@@ -154,7 +187,7 @@ Three ideas hold it together:
 ## Testing
 
 ```
-cargo test --workspace     # 61 tests
+cargo test --workspace     # 83 tests
 ```
 
 `omv-lsp` ships a mock language server (`omv-mock-lsp`) so the client's framing,
@@ -166,7 +199,6 @@ server installed. The UI is tested headlessly through ratatui's `TestBackend`.
 - **Prefix bindings need a following key.** If `d` and `dd` are both bound, `d`
   only fires once a non-matching key arrives — there is no `timeoutlen` yet.
   The default keymap avoids such pairs.
-- **No splits.** One editor view with docked panels; the window tree is future work.
 - **Full-document sync.** Both tree-sitter and LSP re-read the whole buffer on
   every change. Fine to a few thousand lines; incremental is the next step.
 - **No operator-pending grammar.** `d` + motion doesn't compose — `dw`, `diw` and

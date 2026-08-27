@@ -15,6 +15,25 @@ edition = "2024"
 rust-version = "1.90"
 license = "MIT"
 
+# Lint policy lives here, not in CI, so `cargo clippy` on a laptop and `cargo
+# clippy` on a runner reach the same verdict. Previously `-D warnings` existed
+# only in .github/workflows/ci.yml: a local run printed warnings and exited 0,
+# and the failure was first seen minutes later in CI.
+[workspace.lints.rust]
+# The tree contains no `unsafe` at all. Forbidding it (rather than denying)
+# means a crate cannot opt back in with an `#[allow]`.
+unsafe_code = "forbid"
+# Deliberately NOT `warnings = "deny"` here. Denying rustc's warning group in
+# the manifest also applies to `cargo build`, so an unused variable mid-refactor
+# stops the build -- the inner loop becomes hostile and the harness gets
+# bypassed. rustc-warning strictness stays in CI (`-- -D warnings`), which is a
+# gate, not an inner loop. Clippy lints below are safe to deny here because
+# rustc ignores them during a normal build.
+
+[workspace.lints.clippy]
+# priority = -1 so individual lints below/in a crate can override the group.
+all = { level = "deny", priority = -1 }
+
 [workspace.dependencies]
 omv-core = { path = "crates/omv-core" }
 omv-config = { path = "crates/omv-config" }

@@ -137,7 +137,18 @@ actions! {
     SearchPrev            => "search_prev",               "Panels",          "Previous search match";
     Substitute            => "substitute",                "Panels",          "Find and replace text in this buffer";
     ToggleDiagnostics     => "toggle_diagnostics",        "Panels",          "Show/hide the diagnostics panel";
+    ToggleTerminal        => "toggle_terminal",           "Panels",          "Show/hide the shell docked at the bottom";
     ShowKeys              => "show_keys",                 "Panels",          "Show every key binding and what it does";
+
+    // ---- windows ------------------------------------------------------------
+    SplitVertical         => "split_vertical",            "Windows",         "Split the window side by side";
+    SplitHorizontal       => "split_horizontal",          "Windows",         "Split the window top and bottom";
+    FocusWindowLeft       => "window_left",               "Windows",         "Focus the window to the left";
+    FocusWindowDown       => "window_down",               "Windows",         "Focus the window below";
+    FocusWindowUp         => "window_up",                 "Windows",         "Focus the window above";
+    FocusWindowRight      => "window_right",              "Windows",         "Focus the window to the right";
+    CloseWindow           => "window_close",              "Windows",         "Close the focused window";
+    OnlyWindow            => "window_only",               "Windows",         "Close every window but this one";
 
     // ---- lsp ----------------------------------------------------------------
     LspHover              => "lsp_hover",                 "LSP",             "Show hover documentation";

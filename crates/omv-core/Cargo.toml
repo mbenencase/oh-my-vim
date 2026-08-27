@@ -10,3 +10,6 @@ ropey = "1.6.1"
 serde = { workspace = true, features = ["derive"] }
 unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
+
+[lints]
+workspace = true

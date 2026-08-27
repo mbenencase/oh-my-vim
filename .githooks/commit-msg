@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+#
+# Installed by the-office. Catches locally what CI catches on the PR title.
+#
+# .github/scripts/next-version.sh derives the release bump from these subjects,
+# so an unclassifiable subject is silently a no-release. Two features have
+# already shipped that way (ac06cf3, 2863293).
+set -euo pipefail
+
+subject=$(head -1 "$1")
+
+# Merge commits and the release bot's own commits are generated, not authored.
+[[ "$subject" =~ ^Merge ]] && exit 0
+[[ "$subject" =~ ^chore\(release\): ]] && exit 0
+# A comment-only buffer means the commit is being aborted anyway.
+[[ "$subject" =~ ^# ]] && exit 0
+
+known_re='^(feat|fix|perf|revert|docs|style|refactor|test|build|ci|chore)(\([^)]*\))?!?: .'
+if [[ ! "$subject" =~ $known_re ]]; then
+    cat >&2 <<MSG
+commit-msg: not a conventional commit:
+
+    $subject
+
+Expected: <type>[(scope)][!]: <description>
+  type = feat|fix|perf|revert|docs|style|refactor|test|build|ci|chore
+
+Only feat, fix, perf and revert cut a release. feat -> minor,
+fix/perf/revert -> patch, a trailing ! or a BREAKING CHANGE: footer -> major.
+
+Bypass with --no-verify if you mean it.
+MSG
+    exit 1
+fi

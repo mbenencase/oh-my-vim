@@ -97,7 +97,18 @@ keys:
     "<leader>fg": find_text
     "<leader>fb": find_buffers
     "<leader>d": toggle_diagnostics
+    "<C-j>": toggle_terminal
     "<leader>?": show_keys
+
+    # windows
+    "<C-w>v": split_vertical
+    "<C-w>s": split_horizontal
+    "<C-w>h": window_left
+    "<C-w>j": window_down
+    "<C-w>k": window_up
+    "<C-w>l": window_right
+    "<C-w>c": window_close
+    "<C-w>o": window_only
 
     # lsp
     K: lsp_hover
@@ -116,6 +127,7 @@ keys:
 
   insert:
     "<Esc>": normal_mode
+    "<C-j>": toggle_terminal
     "<C-c>": normal_mode
     "<C-w>": delete_word
 

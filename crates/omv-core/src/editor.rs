@@ -20,11 +20,21 @@ pub enum Effect {
     ToggleExplorer,
     FocusExplorer,
     ToggleDiagnostics,
+    /// Show or hide the terminal panel, starting a shell if none is running.
+    ToggleTerminal,
     /// Show the key-binding reference.
     ShowKeys,
     /// Open the find-and-replace prompt.
     OpenSubstitute,
     OpenPicker(Picker),
+    /// Divide the focused window in two, both showing the same buffer.
+    SplitWindow(Split),
+    /// Move focus to the neighbouring window in this direction, if there is one.
+    FocusWindow(Direction),
+    /// Close the focused window, refusing when it is the last one.
+    CloseWindow,
+    /// Close every window but the focused one.
+    OnlyWindow,
     Lsp(LspIntent),
     /// Show a message on the status line.
     Status(String),
@@ -39,6 +49,23 @@ pub enum Picker {
     Files,
     Text,
     Buffers,
+}
+
+/// How a split arranges the two windows it leaves behind. The names follow the
+/// commands: `:vsp` puts them side by side, `:hsp` stacks them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Split {
+    Vertical,
+    Horizontal,
+}
+
+/// A direction to move window focus in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Left,
+    Down,
+    Up,
+    Right,
 }
 
 /// LSP requests expressed without depending on `lsp-types`, so `omv-core`
@@ -202,6 +229,10 @@ impl Editor {
             Action::MoveLeft => moved!(mv::left(self.buffer(), count)),
             Action::MoveRight => moved!(mv::right(self.buffer(), count, past_end)),
             Action::MoveUp | Action::MoveDown => {
+                #[expect(
+                    clippy::cast_possible_wrap,
+                    reason = "count is a keystroke repeat count, bounded by what a human types"
+                )]
                 let delta = if action == Action::MoveUp {
                     -(count as isize)
                 } else {
@@ -230,6 +261,10 @@ impl Editor {
                 moved!(mv::goto_line(self.buffer(), line))
             }
             Action::MoveHalfPageDown | Action::MoveHalfPageUp => {
+                #[expect(
+                    clippy::cast_possible_wrap,
+                    reason = "viewport_height is a terminal row count, never near isize::MAX"
+                )]
                 let half = (self.viewport_height / 2).max(1) as isize;
                 let delta = if action == Action::MoveHalfPageUp {
                     -half
@@ -619,6 +654,7 @@ impl Editor {
             Action::ToggleExplorer => vec![Effect::ToggleExplorer],
             Action::FocusExplorer => vec![Effect::FocusExplorer],
             Action::ToggleDiagnostics => vec![Effect::ToggleDiagnostics],
+            Action::ToggleTerminal => vec![Effect::ToggleTerminal],
             Action::ShowKeys => vec![Effect::ShowKeys],
             Action::FindFiles => vec![Effect::OpenPicker(Picker::Files)],
             Action::FindText => vec![Effect::OpenPicker(Picker::Text)],
@@ -631,6 +667,17 @@ impl Editor {
             Action::SearchNext => self.search(true),
             Action::SearchPrev => self.search(false),
             Action::Substitute => vec![Effect::OpenSubstitute],
+
+            // ---- windows ----------------------------------------------------
+            Action::SplitVertical => vec![Effect::SplitWindow(Split::Vertical)],
+            Action::SplitHorizontal => vec![Effect::SplitWindow(Split::Horizontal)],
+            Action::FocusWindowLeft => vec![Effect::FocusWindow(Direction::Left)],
+            Action::FocusWindowDown => vec![Effect::FocusWindow(Direction::Down)],
+            Action::FocusWindowUp => vec![Effect::FocusWindow(Direction::Up)],
+            Action::FocusWindowRight => vec![Effect::FocusWindow(Direction::Right)],
+            Action::CloseWindow => vec![Effect::CloseWindow],
+            Action::OnlyWindow => vec![Effect::OnlyWindow],
+
             Action::LspHover => vec![Effect::Lsp(LspIntent::Hover(
                 self.buffer().cursor_position(),
             ))],
@@ -891,8 +938,16 @@ impl Editor {
             // `!` is conventionally vim's shell-escape, so `:keys` is the real
             // name and `:!keys` is accepted as an alias rather than claiming `!`.
             "keys" | "!keys" | "map" => self.dispatch(Action::ShowKeys, None),
+            "term" | "terminal" => self.dispatch(Action::ToggleTerminal, None),
             "bn" => self.dispatch(Action::NextBuffer, None),
             "bp" => self.dispatch(Action::PrevBuffer, None),
+            // `:vsp` and `:hsp` are the names the feature is asked for; vim's own
+            // `:vsplit` / `:split` spellings come along because muscle memory has
+            // them and they cost one match arm.
+            "vsp" | "vs" | "vsplit" => self.dispatch(Action::SplitVertical, None),
+            "hsp" | "sp" | "split" => self.dispatch(Action::SplitHorizontal, None),
+            "clo" | "close" => self.dispatch(Action::CloseWindow, None),
+            "on" | "only" => self.dispatch(Action::OnlyWindow, None),
             other => match other.parse::<usize>() {
                 Ok(line_no) => {
                     let idx = mv::goto_line(self.buffer(), line_no.saturating_sub(1));

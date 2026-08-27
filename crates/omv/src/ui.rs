@@ -12,9 +12,14 @@ use crate::app::{App, Focus};
 use crate::help::HelpRow;
 use crate::substitute::Field;
 use crate::theme::Theme;
+use crate::window::{Axis, Window};
 
 const EXPLORER_WIDTH: u16 = 30;
 const DIAGNOSTICS_HEIGHT: u16 = 8;
+/// Share of the body the terminal panel takes, and the bounds it stays within.
+const TERMINAL_SHARE: u16 = 3;
+const TERMINAL_MIN: u16 = 5;
+const TERMINAL_MAX: u16 = 20;
 const SIGN_WIDTH: usize = 2;
 /// Width of the `find  ` / `with  ` labels in the substitute prompt.
 const LABEL_WIDTH: u16 = 6;
@@ -44,23 +49,47 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         [Rect::ZERO, body]
     };
 
-    let [text_area, diagnostics_area] = if app.diagnostics_visible {
-        Layout::vertical([Constraint::Min(1), Constraint::Length(DIAGNOSTICS_HEIGHT)])
-            .areas(main_area)
+    // The terminal is docked under the editor but beside the explorer, the way
+    // an IDE panel sits: the sidebar keeps its full height.
+    let [above, terminal_area] = if app.terminal.visible {
+        let height = (main_area.height / TERMINAL_SHARE)
+            .clamp(TERMINAL_MIN, TERMINAL_MAX)
+            .min(main_area.height.saturating_sub(1));
+        Layout::vertical([Constraint::Min(1), Constraint::Length(height)]).areas(main_area)
     } else {
         [main_area, Rect::ZERO]
     };
 
-    // The core needs the real viewport height for half-page motions and scrolling.
-    app.text_height = text_area.height as usize;
+    let [text_area, diagnostics_area] = if app.diagnostics_visible {
+        Layout::vertical([Constraint::Min(1), Constraint::Length(DIAGNOSTICS_HEIGHT)]).areas(above)
+    } else {
+        [above, Rect::ZERO]
+    };
+
+    let dividers = app.windows.layout(text_area);
+    // The core needs the real viewport height for half-page motions and
+    // scrolling, and "the viewport" is now the focused window, not the screen.
+    app.text_height = app.windows.focused().area.height as usize;
     app.editor.viewport_height = app.text_height;
 
     if app.explorer.visible {
         render_explorer(frame, app, explorer_area);
     }
-    render_text(frame, app, text_area);
+    let windows: Vec<u64> = app.windows.iter().map(|w| w.id).collect();
+    for id in windows {
+        let Some(window) = app.windows.get(id) else {
+            continue;
+        };
+        render_text(frame, app, window);
+    }
+    for divider in dividers {
+        render_divider(frame, app, divider);
+    }
     if app.diagnostics_visible {
         render_diagnostics(frame, app, diagnostics_area);
+    }
+    if app.terminal.visible {
+        render_terminal(frame, app, terminal_area);
     }
     render_status(frame, app, status);
     render_command(frame, app, command);
@@ -75,7 +104,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         render_substitute(frame, app, body);
     }
     if app.hover.is_some() {
-        render_hover(frame, app, text_area);
+        render_hover(frame, app, app.windows.focused().area);
     }
 }
 
@@ -87,14 +116,27 @@ fn char_width(c: char, column: usize, tab_width: usize) -> usize {
     }
 }
 
-fn render_text(frame: &mut Frame, app: &App, area: Rect) {
+/// Draw one window: its slice of one buffer, in its own rect, scrolled to its
+/// own place. Only the focused window shows a selection and the real cursor —
+/// the others are views, not input targets.
+fn render_text(frame: &mut Frame, app: &App, window: &Window) {
+    let area = window.area;
     if area.height == 0 || area.width == 0 {
         return;
     }
     let theme = &app.theme;
-    let buffer = app.editor.buffer();
+    let focused = window.id == app.windows.focused_id();
+    let buffer = &app.editor.buffers[window.buffer.min(app.editor.buffers.len() - 1)];
     let tab_width = app.editor.indent_width;
-    let cursor_line = buffer.cursor_position().line;
+    // The editor owns the live cursor; an unfocused window kept its own.
+    let cursor = if focused {
+        buffer.cursor
+    } else {
+        window.cursor
+    };
+    let cursor_line = buffer.char_to_position(cursor).line;
+    let highlights = app.highlights_for(window.buffer);
+    let scroll = window.scroll;
 
     let total_lines = buffer.line_count();
     let number_width = match app.config.line_numbers {
@@ -103,16 +145,19 @@ fn render_text(frame: &mut Frame, app: &App, area: Rect) {
     };
     let gutter_width = number_width + SIGN_WIDTH;
 
-    let selection = buffer.selection_range(app.editor.mode == Mode::VisualLine);
-    let diagnostics = app.current_diagnostics();
+    let selection = focused
+        .then(|| buffer.selection_range(app.editor.mode == Mode::VisualLine))
+        .flatten();
+    let diagnostics = app.diagnostics_for(buffer);
     // The hit the cursor sits on is "the current one" — replacing acts on it.
-    let current_match = omv_core::substitute::containing(&app.match_ranges, buffer.cursor);
+    let matches: &[std::ops::Range<usize>] = if focused { &app.match_ranges } else { &[] };
+    let current_match = omv_core::substitute::containing(matches, cursor);
 
     let mut lines: Vec<Line> = Vec::with_capacity(area.height as usize);
     let mut cursor_screen: Option<(u16, u16)> = None;
 
     for row in 0..area.height as usize {
-        let line_index = app.scroll + row;
+        let line_index = scroll + row;
         if line_index >= total_lines {
             lines.push(Line::from(Span::styled(
                 "~",
@@ -175,8 +220,7 @@ fn render_text(frame: &mut Frame, app: &App, area: Rect) {
             let c = buffer.rope.char(char_idx);
             let byte = line_start_byte + buffer.rope.slice(start..char_idx).len_bytes();
 
-            let mut style = app
-                .highlights
+            let mut style = highlights
                 .binary_search_by(|s| {
                     if s.end <= byte {
                         std::cmp::Ordering::Less
@@ -187,7 +231,7 @@ fn render_text(frame: &mut Frame, app: &App, area: Rect) {
                     }
                 })
                 .ok()
-                .map(|i| theme.style_for(app.highlights[i].kind))
+                .map(|i| theme.style_for(highlights[i].kind))
                 .unwrap_or_else(|| Style::default().fg(theme.foreground));
 
             if selection.is_some_and(|(lo, hi)| (lo..hi).contains(&char_idx)) {
@@ -195,7 +239,7 @@ fn render_text(frame: &mut Frame, app: &App, area: Rect) {
             } else if line_index == cursor_line {
                 style = style.bg(theme.cursor_line);
             }
-            if let Some(hit) = omv_core::substitute::containing(&app.match_ranges, char_idx) {
+            if let Some(hit) = omv_core::substitute::containing(matches, char_idx) {
                 style = if Some(hit) == current_match {
                     style.fg(theme.status_bg).bg(theme.match_highlight)
                 } else {
@@ -203,7 +247,7 @@ fn render_text(frame: &mut Frame, app: &App, area: Rect) {
                 };
             }
 
-            if char_idx == buffer.cursor {
+            if char_idx == cursor {
                 let x = area.x + (gutter_width + column) as u16;
                 let y = area.y + row as u16;
                 cursor_screen = Some((x, y));
@@ -228,7 +272,7 @@ fn render_text(frame: &mut Frame, app: &App, area: Rect) {
         }
 
         // The cursor may sit one past the last character (end of line, insert mode).
-        if buffer.cursor == end && line_index == cursor_line {
+        if cursor == end && line_index == cursor_line {
             cursor_screen = Some((area.x + (gutter_width + column) as u16, area.y + row as u16));
         }
 
@@ -241,12 +285,31 @@ fn render_text(frame: &mut Frame, app: &App, area: Rect) {
     );
 
     if let Some((x, y)) = cursor_screen
+        && focused
         && app.focus == Focus::Editor
         && x < area.right()
         && y < area.bottom()
     {
         frame.set_cursor_position((x, y));
     }
+}
+
+/// The rule between two windows. One cell wide, so it reads as a seam rather
+/// than a frame around every view.
+fn render_divider(frame: &mut Frame, app: &App, divider: crate::window::Divider) {
+    let (glyph, count) = match divider.axis {
+        Axis::Columns => ("\u{2502}", divider.area.height),
+        Axis::Rows => ("\u{2500}", divider.area.width),
+    };
+    let style = Style::default().fg(app.theme.gutter);
+    let text = match divider.axis {
+        Axis::Columns => Text::from(vec![Line::from(Span::styled(glyph, style)); count as usize]),
+        Axis::Rows => Text::from(Line::from(Span::styled(
+            glyph.repeat(count as usize),
+            style,
+        ))),
+    };
+    frame.render_widget(Paragraph::new(text), divider.area);
 }
 
 fn render_explorer(frame: &mut Frame, app: &App, area: Rect) {
@@ -328,6 +391,103 @@ fn render_diagnostics(frame: &mut Frame, app: &App, area: Rect) {
         Text::from(lines)
     };
     frame.render_widget(Paragraph::new(body), inner);
+}
+
+/// Paint the emulator's screen. The panel is also where the pty learns its
+/// size: only the renderer knows how many rows and columns the shell has.
+fn render_terminal(frame: &mut Frame, app: &mut App, area: Rect) {
+    let theme = &app.theme;
+    let focused = app.focus == Focus::Terminal;
+    let block = panel_block(theme, " Terminal ", focused);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    app.terminal_size = Some((inner.height, inner.width));
+
+    let default_fg = theme.foreground;
+    let default_bg = theme.background;
+    let Some(session) = &mut app.terminal.session else {
+        return;
+    };
+    session.resize(inner.height, inner.width);
+    let screen = session.screen();
+
+    let mut lines: Vec<Line> = Vec::with_capacity(inner.height as usize);
+    for row in 0..inner.height {
+        let mut spans: Vec<Span> = Vec::new();
+        let mut run = String::new();
+        let mut run_style: Option<Style> = None;
+        for column in 0..inner.width {
+            let Some(cell) = screen.cell(row, column) else {
+                continue;
+            };
+            // The second half of a double-width character carries no contents
+            // of its own; the first half already pushed the whole glyph.
+            if cell.is_wide_continuation() {
+                continue;
+            }
+            let mut style = Style::default()
+                .fg(terminal_color(cell.fgcolor(), default_fg))
+                .bg(terminal_color(cell.bgcolor(), default_bg));
+            if cell.inverse() {
+                style = Style::default()
+                    .fg(terminal_color(cell.bgcolor(), default_bg))
+                    .bg(terminal_color(cell.fgcolor(), default_fg));
+            }
+            if cell.bold() {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            if cell.italic() {
+                style = style.add_modifier(Modifier::ITALIC);
+            }
+            if cell.underline() {
+                style = style.add_modifier(Modifier::UNDERLINED);
+            }
+
+            if run_style != Some(style) {
+                if let Some(previous) = run_style.take() {
+                    spans.push(Span::styled(std::mem::take(&mut run), previous));
+                }
+                run_style = Some(style);
+            }
+            match cell.contents() {
+                "" => run.push(' '),
+                text => run.push_str(text),
+            }
+        }
+        if let Some(style) = run_style {
+            spans.push(Span::styled(run, style));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    let cursor = (!screen.hide_cursor()).then(|| screen.cursor_position());
+    frame.render_widget(
+        Paragraph::new(Text::from(lines)).style(Style::default().bg(default_bg)),
+        inner,
+    );
+
+    // The shell owns the cursor while the panel has focus, exactly as the
+    // buffer view owns it while the editor does.
+    if let Some((row, column)) = cursor
+        && focused
+        && row < inner.height
+        && column < inner.width
+    {
+        frame.set_cursor_position((inner.x + column, inner.y + row));
+    }
+}
+
+/// Map a terminal colour onto ratatui's, leaving the theme to say what
+/// "default" means so the panel matches the rest of the editor.
+fn terminal_color(color: vt100::Color, default: ratatui::style::Color) -> ratatui::style::Color {
+    match color {
+        vt100::Color::Default => default,
+        vt100::Color::Idx(i) => ratatui::style::Color::Indexed(i),
+        vt100::Color::Rgb(r, g, b) => ratatui::style::Color::Rgb(r, g, b),
+    }
 }
 
 fn render_picker(frame: &mut Frame, app: &App, area: Rect) {
@@ -570,7 +730,7 @@ fn render_hover(frame: &mut Frame, app: &App, area: Rect) {
         .buffer()
         .cursor_position()
         .line
-        .saturating_sub(app.scroll)) as u16;
+        .saturating_sub(app.scroll())) as u16;
 
     // Prefer below the cursor, flip above when there isn't room.
     let y = if cursor_row + 1 + height <= area.height {

@@ -14,10 +14,15 @@ omv-core.workspace = true
 omv-find.workspace = true
 omv-lsp.workspace = true
 omv-syntax.workspace = true
+portable-pty = "0.9"
 ratatui = "0.30.2"
 tracing.workspace = true
 tracing-subscriber = "0.3.23"
 unicode-width = "0.2.2"
+vt100 = "0.16"
 
 [dev-dependencies]
 serde_yaml_ng = "0.10.0"
+
+[lints]
+workspace = true
