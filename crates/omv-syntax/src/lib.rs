@@ -4,6 +4,10 @@
 //! line-oriented renderer wants. Grammar-specific capture names are folded into
 //! a small [`HighlightKind`] set so themes stay language-agnostic.
 
+pub mod markdown;
+
+pub use markdown::{HeadingLevel, MarkdownKind, MarkdownLine, MarkdownSpan};
+
 use std::collections::HashMap;
 use std::path::Path;
 
