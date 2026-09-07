@@ -826,4 +826,69 @@ mod tests {
         assert_eq!(picker.kind, PickerKind::Buffers);
         assert_eq!(picker.matches.len(), 1, "one scratch buffer is open");
     }
+
+    #[test]
+    fn leader_m_toggles_the_markdown_render_flag() {
+        let mut app = app_with_text("# Heading\n");
+        assert_eq!(app.markdown_render, None, "hidden until toggled");
+
+        press(&mut app, crossterm::event::KeyCode::Char(' '));
+        press(&mut app, crossterm::event::KeyCode::Char('m'));
+        assert_eq!(
+            app.markdown_render,
+            Some(app.windows.focused_id()),
+            "<leader>m must attach the pane to the focused window"
+        );
+
+        press(&mut app, crossterm::event::KeyCode::Char(' '));
+        press(&mut app, crossterm::event::KeyCode::Char('m'));
+        assert_eq!(
+            app.markdown_render, None,
+            "pressing <leader>m again must hide it"
+        );
+    }
+
+    #[test]
+    fn the_md_command_toggles_the_same_flag() {
+        let mut app = app_with_text("# Heading\n");
+
+        ex(&mut app, "md");
+        assert_eq!(app.markdown_render, Some(app.windows.focused_id()));
+
+        ex(&mut app, "markdown");
+        assert_eq!(
+            app.markdown_render, None,
+            ":md and :markdown must drive the same flag"
+        );
+    }
+
+    #[test]
+    fn toggling_on_records_the_focused_window_and_off_clears_it() {
+        let mut app = app_with_text("# Heading\n");
+        ex(&mut app, "vsp");
+        screen(&mut app); // lays out the windows, which directional focus reads
+        let source = app.windows.focused_id();
+
+        ex(&mut app, "md");
+        assert_eq!(
+            app.markdown_render,
+            Some(source),
+            "the pane must remember the window it was toggled on from"
+        );
+
+        // Move focus to the sibling window before toggling off.
+        press_ctrl(&mut app, 'w');
+        press(&mut app, crossterm::event::KeyCode::Char('h'));
+        assert_ne!(
+            app.windows.focused_id(),
+            source,
+            "focus must actually have moved for this test to prove anything"
+        );
+
+        ex(&mut app, "md");
+        assert_eq!(
+            app.markdown_render, None,
+            "toggling off clears the flag regardless of which window is focused"
+        );
+    }
 }

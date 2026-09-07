@@ -46,6 +46,12 @@ pub struct App {
     pub match_ranges: Vec<std::ops::Range<usize>>,
     pub diagnostics: HashMap<PathBuf, Vec<Diagnostic>>,
     pub diagnostics_visible: bool,
+    /// `Some(id)` means the Markdown render pane is visible, attached to
+    /// window `id` — the one it was toggled on from, not whichever window
+    /// happens to be focused when the buffer changes or the pane is drawn.
+    /// It is not a member of `Windows`' tree (see REQ-003/REQ-008): the pane
+    /// is never focusable and never independently addressable.
+    pub markdown_render: Option<WindowId>,
     pub hover: Option<String>,
     /// Syntax spans per buffer index. Kept per buffer rather than for the
     /// current one alone: a split can show two files at once, and only the
@@ -95,6 +101,7 @@ impl App {
             match_ranges: Vec::new(),
             diagnostics: HashMap::new(),
             diagnostics_visible: false,
+            markdown_render: None,
             hover: None,
             highlights: HashMap::new(),
             windows: Windows::new(),
@@ -548,6 +555,16 @@ impl App {
                     self.diagnostics_visible = !self.diagnostics_visible;
                 }
                 Effect::ToggleTerminal => self.toggle_terminal(),
+                Effect::ToggleMarkdownRender => {
+                    // Toggling on always attaches to whoever is focused *now*;
+                    // toggling off clears the flag regardless of focus, so a
+                    // pane opened on window A and left visible after focus
+                    // moves to B still closes on the second press.
+                    self.markdown_render = match self.markdown_render {
+                        Some(_) => None,
+                        None => Some(self.windows.focused_id()),
+                    };
+                }
                 Effect::ShowKeys => {
                     // Rebuilt on each open so it reflects the live keymap.
                     self.help = Some(Help::build(&self.config));
