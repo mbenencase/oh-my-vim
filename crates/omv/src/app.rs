@@ -619,11 +619,15 @@ impl App {
                     let id = self.windows.focused_id();
                     if self.windows.close(id) {
                         self.focus_window(self.windows.focused_id());
+                        self.forget_markdown_pane_if_its_window_is_gone();
                     } else {
                         self.status = "E: cannot close the last window".into();
                     }
                 }
-                Effect::OnlyWindow => self.windows.only(self.windows.focused_id()),
+                Effect::OnlyWindow => {
+                    self.windows.only(self.windows.focused_id());
+                    self.forget_markdown_pane_if_its_window_is_gone();
+                }
                 Effect::OpenSubstitute => self.open_substitute(),
                 Effect::Lsp(intent) => self.send_lsp(intent),
                 Effect::Quit { force } => {
@@ -877,6 +881,23 @@ impl App {
             return;
         };
         self.refresh_markdown_for(window.buffer);
+    }
+
+    /// REQ-008: `window_close`/`window_only` can remove the window the render
+    /// pane is attached to without any effect that names the pane itself —
+    /// `Windows` has no idea the pane exists (it must not, per the
+    /// Constraints in the feature spec), so `App` has to notice on its own,
+    /// right after the tree mutates, that the id it was watching is gone.
+    /// Checking `windows.get(id)` directly rather than tracking "did this
+    /// operation touch my window" keeps this correct regardless of which
+    /// window-tree operation caused it, and a no-op whenever the pane is
+    /// hidden or its window survived.
+    fn forget_markdown_pane_if_its_window_is_gone(&mut self) {
+        if let Some(id) = self.markdown_render
+            && self.windows.get(id).is_none()
+        {
+            self.markdown_render = None;
+        }
     }
 
     /// The rendered document for one buffer; empty when nothing has parsed it

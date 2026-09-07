@@ -1502,4 +1502,136 @@ mod tests {
             "and the next keystroke exactly one more again"
         );
     }
+
+    // ---- markdown render pane vs. the window tree (REQ-008) ----------------
+
+    #[test]
+    fn splitting_the_source_window_leaves_one_render_pane_on_the_original() {
+        let mut app = app_with_text("# Title\n");
+        let source = app.windows.focused_id();
+        ex(&mut app, "md");
+        assert_eq!(app.markdown_render, Some(source));
+
+        ex(&mut app, "vsp");
+        assert_eq!(
+            app.windows.count(),
+            2,
+            ":vsp with a pane visible must raise the count by exactly one, same as with no pane"
+        );
+        assert_ne!(
+            app.windows.focused_id(),
+            source,
+            "vsp focuses the new half, not the source, so the assertion below is meaningful"
+        );
+        assert_eq!(
+            app.markdown_render,
+            Some(source),
+            "the pane must stay on the window that kept the source's id, not whichever is now focused"
+        );
+
+        let out = screen(&mut app);
+        assert_eq!(
+            out.matches("Markdown").count(),
+            1,
+            "exactly one render pane must be drawn, not one per resulting window:\n{out}"
+        );
+    }
+
+    #[test]
+    fn closing_the_source_window_removes_its_render_pane() {
+        let mut app = app_with_text("# Title\n");
+        let source = app.windows.focused_id();
+        ex(&mut app, "md");
+        assert_eq!(app.markdown_render, Some(source));
+
+        ex(&mut app, "vsp");
+        screen(&mut app); // lays the windows out, which directional focus reads
+        assert_ne!(
+            app.windows.focused_id(),
+            source,
+            "vsp focuses the new sibling, not the source"
+        );
+
+        // Closing a window that is not the source must leave the pane alone.
+        ex(&mut app, "close");
+        assert_eq!(
+            app.markdown_render,
+            Some(source),
+            "closing an unrelated window must not touch the pane"
+        );
+        assert_eq!(app.windows.count(), 1);
+
+        // Recreate a sibling, return focus to the source, then close it.
+        ex(&mut app, "vsp");
+        screen(&mut app);
+        press_ctrl(&mut app, 'w');
+        press(&mut app, crossterm::event::KeyCode::Char('h'));
+        assert_eq!(
+            app.windows.focused_id(),
+            source,
+            "<C-w>h must return focus to the source window"
+        );
+        ex(&mut app, "close");
+        assert_eq!(
+            app.markdown_render, None,
+            "closing the source window must clear the pane"
+        );
+    }
+
+    #[test]
+    fn window_only_keeps_the_render_pane_only_when_the_survivor_is_the_source() {
+        // :only run from the source window keeps the pane.
+        let mut app = app_with_text("# Title\n");
+        let source = app.windows.focused_id();
+        ex(&mut app, "md");
+        ex(&mut app, "vsp");
+        screen(&mut app);
+        press_ctrl(&mut app, 'w');
+        press(&mut app, crossterm::event::KeyCode::Char('h'));
+        assert_eq!(app.windows.focused_id(), source);
+        ex(&mut app, "only");
+        assert_eq!(app.windows.count(), 1);
+        assert_eq!(
+            app.markdown_render,
+            Some(source),
+            ":only from the source window must keep its pane"
+        );
+
+        // :only run from the sibling clears the pane.
+        let mut app = app_with_text("# Title\n");
+        let source = app.windows.focused_id();
+        ex(&mut app, "md");
+        ex(&mut app, "vsp");
+        assert_ne!(
+            app.windows.focused_id(),
+            source,
+            "vsp focuses the new sibling, not the source"
+        );
+        ex(&mut app, "only");
+        assert_eq!(app.windows.count(), 1);
+        assert_eq!(
+            app.markdown_render, None,
+            ":only from a window other than the source must clear the pane"
+        );
+    }
+
+    #[test]
+    fn toggling_the_render_pane_never_changes_the_window_count() {
+        let mut app = app_with_text("# Title\n");
+        let before = app.windows.count();
+
+        ex(&mut app, "md");
+        assert_eq!(
+            app.windows.count(),
+            before,
+            "showing the pane must not add a window; it is not a member of the tree"
+        );
+
+        ex(&mut app, "md");
+        assert_eq!(
+            app.windows.count(),
+            before,
+            "hiding the pane must not remove a window either"
+        );
+    }
 }

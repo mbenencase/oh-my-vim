@@ -7,7 +7,7 @@ requirements: [REQ-008]
 acceptance_criteria: [AC-008]
 verification_mode: acceptance
 depends_on: [markdown-rendering-toggle/task-04]
-status: pending
+status: in-progress
 tier: standard
 scope:
   - crates/omv/src/app.rs
@@ -35,9 +35,9 @@ dod: |
   is the source window and clears it otherwise. Toggling the pane on or off
   never changes `windows.count()`. `crates/omv/src/window.rs` is untouched and
   its existing test suite still passes unchanged.
-attempts: 0
+attempts: 1
 max_attempts: 3
-base_commit: null
+base_commit: ce800ab717ba0ad21647288ca441fc76dfce42d2
 branch: null
 commit: null
 ---
