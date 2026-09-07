@@ -50,7 +50,7 @@ invariants were documented in prose and enforced by nothing.
 | `pre-commit`: fmt + fitness functions + clippy | computational-sensor | `.githooks/pre-commit` | 2026-08-26 |
 | `pre-push`: tests + test-count ratchet | computational-sensor | `.githooks/pre-push` | 2026-08-26 |
 | Test suite | computational-sensor | `cargo test --workspace --locked` | pre-existing |
-| Test-count ratchet (floor 83) | computational-sensor | `.github/workflows/ci.yml`, `.githooks/pre-push` | 2026-08-26 |
+| Test-count ratchet (floor 127) | computational-sensor | `.github/workflows/ci.yml`, `.githooks/pre-push` | 2026-08-26 |
 | Advisories / licences / sources | computational-sensor | `cargo deny check` | 2026-08-26, **scheduled weekly, not a PR gate** |
 | `CLAUDE.md` | inferential-guide | — | pre-existing; merged with the rust pack 2026-08-26 |
 
@@ -85,7 +85,7 @@ workflow, and the tooling's permission system declined to set it on their behalf
 | **Mutation testing as a sensor** (`one-sided-test-coverage`, 5 recurrences) | `cargo-mutants`, gated or scheduled | **Decision: measured, then rejected.** `cargo-mutants 25.0.1` was installed and run in disposable worktrees, not theorised about. Whole-file on `app.rs`: 9m05s, 178 mutants, **106 survivors** — unactionable. Scoped `--in-diff`: 1m45s, 8 mutants, 1 survivor — affordable. But against the five findings that motivated it, it reproduces **one**, cannot model **two** (swapping `window.buffer` for `editor.current` is an identifier substitution; no standard genome has that operator), and reports **two as caught while the defect survives** — its whole-function mutant `replace App::activate_payload with ()` is killed by a test exercising a *different* `Payload` variant, so the specific dead call stays dead and the function reads as covered. A green run would launder false confidence exactly where the reviewer says none should be trusted, which is worse than no control. The reviewer's working method is hypothesis-driven single-statement mutation, finer-grained than any off-the-shelf genome — that is a category difference, not a tuning problem. Stays an inferential sensor (Reviewer, Behaviour lens). |
 | **`check-does-not-cover-dod`** (3 recurrences) | — | **Decision: stays inferential.** The Janitor built the obvious sensor — flag any `dod:` clause sharing no identifier token with `checks:` — ran it against four task files, and rejected it. It false-positives on covered prose (it cannot tell sentence-initial English from identifiers without becoming an LLM judge) and false-negatives on 2 of the 3 real instances, which were sub-clauses inside longer sentences that also contained covered content. The three instances share a symptom, not a mechanism: crate purity, structural placement, cursor behaviour. Only the first had a cheap computational form, and that is the F3 widening above. The inferential control is not failing — the Reviewer caught all three; what recurred is authoring discipline, which a reviewer sensor catches rather than prevents. |
 | **`.editorconfig`** | one file | **Decision, not approved in this round.** Still reported missing by `office audit`. `rustfmt.toml` already fixes the only thing that matters for `.rs` files; an `.editorconfig` would cover YAML and Markdown. Cheap, low value, not installed without approval. |
-| **`office audit` still reports `rust:tests` missing** | — | **Audit artifact, not a real gap.** The detector looks for a top-level `tests/` directory; this workspace puts unit tests in `#[cfg(test)]` modules and its integration test in `crates/omv-lsp/tests/client.rs`. 83 tests run in CI. |
+| **`office audit` still reports `rust:tests` missing** | — | **Audit artifact, not a real gap.** The detector looks for a top-level `tests/` directory; this workspace puts unit tests in `#[cfg(test)]` modules and its integration test in `crates/omv-lsp/tests/client.rs`. 127 tests run in CI. |
 | **Duplicate dependency versions** | upstream | **Decision.** 5 duplicates today (`bitflags`, `hashbrown`, `syn`, `thiserror`, `thiserror-impl`). `multiple-versions = "warn"` — resolving them means waiting on upstream, not on this repo. |
 
 ## Adoption order
@@ -120,7 +120,7 @@ Installed in this order, each verified green before the next:
 
 | Control | Current | Target |
 |---|---|---|
-| Passing tests (`cargo test --workspace`) | **83** | monotonically up; raise the floor in `ci.yml` and `.githooks/pre-push` when it rises |
+| Passing tests (`cargo test --workspace`) | **127** | monotonically up; raise the floor in `ci.yml` and `.githooks/pre-push` when it rises |
 | `#[expect(clippy::cast_*)]` grandfathers in `omv-core` | **3 statements, 5 cast sites** | 0. Self-cleaning: `#[expect]` un-fulfils itself once a cast is removed, so a stale grandfather fails the build. Count with `grep -rn 'expect(clippy::cast' crates/omv-core/src` |
 | Cast-lint warnings across the whole workspace | **37** (`omv/src/ui.rs` 9, `omv/src/app.rs` 9, `omv-core` 5, others 14) | 0, then promote the lints from `omv-core`-only to workspace-wide |
 | `clippy::pedantic` warnings | **170** | not a target; recorded so a future decision has a number |

@@ -13,7 +13,7 @@ that matter when *changing* the code.
 
 ```bash
 cargo build --workspace
-cargo test --workspace          # 83 tests, all fast; no language server needed
+cargo test --workspace          # 127 tests, all fast; no language server needed
 cargo run -p omv -- src/main.rs # open the editor on a file
 cargo run -p omv -- --list-actions   # every bindable action + description
 cargo run -p omv -- --list-keys      # the keymap after config merge
@@ -158,6 +158,15 @@ the command table too.
   input only. The substitute prompt is the one that also *edits*: it calls
   `Editor::substitute` and drains the effects like any other caller, so the
   replacement still goes through the core's undo transactions.
+- **The render pane is not a window.** Unlike real window splits (which are members
+  of the `Windows` tree in `crates/omv/src/window.rs`), the Markdown render pane is
+  a renderer-level companion drawn by subdividing the source window's screen rect in
+  `ui.rs`. It is stored as an editor-wide `Option<WindowId>` on `App` (tracking which
+  window it is attached to) but is never a node in the window tree and is never
+  focusable. The renderer (`omv-syntax::markdown::Renderer`) parses and renders the
+  buffer with one rendered line per source line, so both panes share a scroll offset
+  and stay approximately aligned; exact line-for-line correspondence is not required,
+  since markup collapses the line count (e.g. `**bold**` → `bold`).
 - **Full-document sync.** Both tree-sitter and LSP re-read the whole buffer on
   every `Effect::BufferChanged`. Fine at current scale; incremental is future work
   and `omv-syntax::Highlighter::highlight` is the single place it would land.
@@ -214,7 +223,7 @@ Match the existing test style: names read as sentences describing the behaviour
 (`line_wise_paste_lands_on_its_own_line`), and assertions carry a short message
 explaining the rule.
 
-The count is a ratchet. **83 passing at last measurement**, and CI fails if it
+The count is a ratchet. **127 passing at last measurement**, and CI fails if it
 drops below that — a deleted `#[test]` is otherwise indistinguishable from a
 green run. If you remove a test deliberately, lower the floor in
 `.github/workflows/ci.yml`, `.githooks/pre-push` and `.the-office/harness.md` in
