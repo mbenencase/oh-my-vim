@@ -52,14 +52,14 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       # One run, two assertions: the suite passes, and it has not shrunk.
-      # 83 is the measured count at install time and is a ratchet, not a target
+      # 127 is the measured count at install time and is a ratchet, not a target
       # -- a deleted `#[test]` is otherwise indistinguishable from a green run.
       - name: Tests
         run: |
           set -o pipefail
           cargo test --workspace --locked 2>&1 | tee /tmp/test.out
 
-          floor=83
+          floor=127
           count=$(sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' /tmp/test.out \
             | awk '{s+=$1} END {print s+0}')
           echo "passing tests: $count (floor $floor)"

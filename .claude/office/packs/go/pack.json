@@ -1,0 +1,44 @@
+{
+  "stack": "go",
+  "detect": ["go.mod"],
+  "controls": [
+    {
+      "id": "formatter", "label": "gofmt", "cell": "computational-sensor",
+      "check": "test -z \"$(gofmt -l .)\"", "fix": "gofmt -w .",
+      "cost": "low", "legacy_order": 1,
+      "note": "Inherent to the toolchain. Almost always already clean; costs nothing to enforce."
+    },
+    {
+      "id": "vet", "label": "go vet", "cell": "computational-sensor",
+      "check": "go vet ./...", "cost": "low", "legacy_order": 2,
+      "note": "Ships with the toolchain and has an extremely low false-positive rate. Enforce immediately."
+    },
+    {
+      "id": "linter", "label": "golangci-lint", "cell": "computational-sensor",
+      "files": [".golangci.yml"], "check": "golangci-lint run",
+      "cost": "medium", "legacy_order": 3,
+      "note": "Config ships with a narrow linter set and new-code-only mode enabled, so a legacy repo is gated on new commits without a backlog rewrite."
+    },
+    {
+      "id": "tests", "label": "go test", "cell": "computational-sensor",
+      "check": "go test ./...", "cost": "medium", "legacy_order": 4,
+      "note": "Add -race in CI. Locally it roughly doubles runtime, which is enough friction that people stop running tests."
+    },
+    {
+      "id": "coverage", "label": "coverage floor", "cell": "computational-sensor",
+      "check": "go test -coverprofile=/tmp/office-cover.out ./... && go tool cover -func=/tmp/office-cover.out | tail -1",
+      "cost": "medium", "legacy_order": 5,
+      "note": "Record the current total in harness.md and ratchet as a tracked task."
+    },
+    {
+      "id": "boundaries", "label": "import boundary test", "cell": "computational-sensor",
+      "files": ["arch_test.go"], "check": "go test ./... -run TestArchitecture",
+      "cost": "low", "legacy_order": 6,
+      "note": "An architecture fitness function. This is the control most repos lack and most need: it makes module boundaries enforceable rather than aspirational."
+    },
+    {
+      "id": "guides", "label": "CLAUDE.md conventions", "cell": "inferential-guide",
+      "files": ["GUIDE.md"], "cost": "low", "legacy_order": 0, "note": "Merged into the repo's CLAUDE.md."
+    }
+  ]
+}

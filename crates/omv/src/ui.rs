@@ -12,7 +12,7 @@ use crate::app::{App, Focus};
 use crate::help::HelpRow;
 use crate::substitute::Field;
 use crate::theme::Theme;
-use crate::window::{Axis, Window};
+use crate::window::{Axis, DIVIDER, Divider, Window};
 
 const EXPLORER_WIDTH: u16 = 30;
 const DIAGNOSTICS_HEIGHT: u16 = 8;
@@ -21,6 +21,10 @@ const TERMINAL_SHARE: u16 = 3;
 const TERMINAL_MIN: u16 = 5;
 const TERMINAL_MAX: u16 = 20;
 const SIGN_WIDTH: usize = 2;
+/// Smallest render pane worth drawing: a border on each side plus one column
+/// of text, and the same in rows. Narrower than this and the window keeps its
+/// full width instead — the spec accepts a cramped pane, not a hidden window.
+const MARKDOWN_MIN: u16 = 3;
 /// Width of the `find  ` / `with  ` labels in the substitute prompt.
 const LABEL_WIDTH: u16 = 6;
 
@@ -67,6 +71,37 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     };
 
     let dividers = app.windows.layout(text_area);
+
+    // The Markdown render pane is a companion to one window's rect, not a node
+    // in the split tree — that is what keeps it unfocusable (REQ-003). It is
+    // carved out here, *before the window loop draws anything*, by narrowing
+    // the source window's own stored rect rather than by handing `render_text`
+    // an override, because two things downstream read the stored rect and
+    // would be wrong against a full-width one:
+    //   - `render_text` places the terminal cursor only while `x <
+    //     area.right()`, so a full-width rect would put the cursor over the
+    //     pane's columns;
+    //   - `Windows::in_direction` picks the neighbour from the rects the last
+    //     frame assigned, so directional focus would aim at geometry nothing
+    //     was drawn in.
+    let markdown_source = app.markdown_render;
+    let markdown_pane = markdown_source.and_then(|id| {
+        // A flag naming a window that no longer exists draws nothing; clearing
+        // it is task-05's job, not the renderer's.
+        let area = app.windows.get(id)?.area;
+        let [raw, seam, pane] = Layout::horizontal([
+            Constraint::Fill(1),
+            Constraint::Length(DIVIDER),
+            Constraint::Fill(1),
+        ])
+        .areas(area);
+        if raw.width == 0 || pane.width < MARKDOWN_MIN || pane.height < MARKDOWN_MIN {
+            return None;
+        }
+        app.windows.get_mut(id)?.area = raw;
+        Some((id, seam, pane))
+    });
+
     // The core needs the real viewport height for half-page motions and
     // scrolling, and "the viewport" is now the focused window, not the screen.
     app.text_height = app.windows.focused().area.height as usize;
@@ -84,6 +119,21 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
     for divider in dividers {
         render_divider(frame, app, divider);
+    }
+    if let Some((id, seam, pane)) = markdown_pane
+        && let Some(window) = app.windows.get(id)
+    {
+        // The same one-cell seam two real side-by-side windows get, so the
+        // pane reads as part of the split rather than a floating overlay.
+        render_divider(
+            frame,
+            app,
+            Divider {
+                area: seam,
+                axis: Axis::Columns,
+            },
+        );
+        render_markdown_pane(frame, app, window, pane);
     }
     if app.diagnostics_visible {
         render_diagnostics(frame, app, diagnostics_area);
@@ -310,6 +360,45 @@ fn render_divider(frame: &mut Frame, app: &App, divider: crate::window::Divider)
         ))),
     };
     frame.render_widget(Paragraph::new(text), divider.area);
+}
+
+/// Draw one window's cached Markdown beside it. Read-only and never focused,
+/// so `panel_block`'s focused flag is always false.
+///
+/// Scroll comes from the source window, which is all the alignment the pane
+/// needs: `omv_syntax::markdown` guarantees one rendered line per source line.
+fn render_markdown_pane(frame: &mut Frame, app: &App, window: &Window, area: Rect) {
+    let theme = &app.theme;
+    let block = panel_block(theme, " Markdown ", false);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // `get(..)` rather than `[window.scroll..]`: the cache can legitimately be
+    // shorter than the window's scroll — a jump into a longer file sets the
+    // scroll for a buffer the cache has not been refreshed for yet — and a
+    // bare slice would panic there instead of drawing an empty pane.
+    let lines: Vec<Line> = app
+        .markdown_for(window.buffer)
+        .get(window.scroll..)
+        .unwrap_or(&[])
+        .iter()
+        .take(inner.height as usize)
+        .map(|line| {
+            Line::from(
+                line.spans
+                    .iter()
+                    .map(|span| Span::styled(span.text.as_str(), theme.markdown_style(span.kind)))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+
+    // No `Wrap`: a long line is truncated at the pane's width, the way the
+    // text view truncates rather than reflowing.
+    frame.render_widget(
+        Paragraph::new(Text::from(lines)).style(Style::default().bg(theme.background)),
+        inner,
+    );
 }
 
 fn render_explorer(frame: &mut Frame, app: &App, area: Rect) {

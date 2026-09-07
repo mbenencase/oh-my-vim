@@ -1,0 +1,16 @@
+{
+  "//": "Installed by the-office. Extend your root tsconfig from this, or point tsc at it directly. On a legacy repo, narrow `include` to the modules you have actually migrated and widen it one task at a time — a repo-wide strict flip produces an error wall nobody triages.",
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "module": "esnext",
+    "target": "es2022"
+  },
+  "include": ["src/**/*"]
+}

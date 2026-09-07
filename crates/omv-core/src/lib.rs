@@ -217,4 +217,24 @@ mod tests {
         ed.dispatch(Action::MoveWordForward, Some(3));
         assert_eq!(ed.buffer().cursor, 14, "3w lands on `four`");
     }
+
+    #[test]
+    fn toggle_markdown_render_asks_the_ui_to_toggle() {
+        // The core only ever reports intent; App owns the flag this toggles.
+        let mut ed = Editor::new();
+        assert_eq!(
+            ed.dispatch(Action::ToggleMarkdownRender, None),
+            vec![Effect::ToggleMarkdownRender],
+            "the action must yield exactly the one effect the UI reacts to"
+        );
+
+        for cmd in ["md", "markdown"] {
+            ed.command_line = cmd.to_string();
+            assert_eq!(
+                ed.execute_command_line(),
+                vec![Effect::ToggleMarkdownRender],
+                "`:{cmd}` must reach the same action as the key binding"
+            );
+        }
+    }
 }

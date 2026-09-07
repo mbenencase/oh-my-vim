@@ -1,0 +1,17 @@
+# Installed by the-office. Only the fast controls belong here — a hook slower
+# than a few seconds gets bypassed with --no-verify, which is worse than no hook.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+  - repo: local
+    hooks:
+      - id: office-validate
+        name: office validate (board integrity)
+        entry: node .claude/office/bin/office.mjs validate
+        language: system
+        pass_filenames: false
+        files: '^\.the-office/'

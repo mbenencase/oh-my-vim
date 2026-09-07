@@ -40,9 +40,15 @@ for p in meta["packages"]:
     if "tokio" in direct and p["name"] != "omv-lsp":
         fail.append(f"F2 async-quarantine: {p['name']} declares a tokio dependency")
 
-# --- F3: omv-core purity -----------------------------------------------------
+# --- F3: pure-crate purity ---------------------------------------------------
 # CLAUDE.md: "Never reach into the terminal, filesystem-beyond-the-buffer, or a
 # language server from omv-core." buffer.rs load/save is the sanctioned exception.
+#
+# omv-syntax is scanned on the same terms. It is architecturally the same shape
+# of thing -- text in, structured data out -- and has no sanctioned filesystem
+# exception at all, so FS_EXEMPT does not apply to it. Widened after a reviewer
+# caught that task-01's "the parser is pure" promise was checked by nothing: a
+# std::process call in omv-syntax passed every check green.
 FORBIDDEN = ["std::process","std::net","std::io::stdout","std::io::stdin",
              "std::env","tokio","crossterm","ratatui"]
 FS_EXEMPT = {"buffer.rs"}
@@ -52,14 +58,17 @@ def strip_comments(t):
     # produces false positives.
     return "\n".join(re.sub(r"//.*$", "", ln) for ln in t.splitlines())
 
-for f in sorted((ROOT/"crates/omv-core/src").rglob("*.rs")):
-    text = strip_comments(f.read_text())
-    for pat in FORBIDDEN:
-        if pat in text:
-            fail.append(f"F3 core-purity: {f.relative_to(ROOT)} references {pat}")
-    if "std::fs" in text and f.name not in FS_EXEMPT:
-        fail.append(f"F3 core-purity: {f.relative_to(ROOT)} touches std::fs "
-                    f"(only {'/'.join(FS_EXEMPT)} may)")
+for crate, fs_exempt in (("omv-core", FS_EXEMPT), ("omv-syntax", frozenset())):
+    for f in sorted((ROOT/f"crates/{crate}/src").rglob("*.rs")):
+        text = strip_comments(f.read_text())
+        for pat in FORBIDDEN:
+            if pat in text:
+                fail.append(f"F3 core-purity: {f.relative_to(ROOT)} references {pat}")
+        if "std::fs" in text and f.name not in fs_exempt:
+            allowed = (f"only {'/'.join(sorted(fs_exempt))} may"
+                       if fs_exempt else f"no file in {crate} may")
+            fail.append(f"F3 core-purity: {f.relative_to(ROOT)} touches std::fs "
+                        f"({allowed})")
 
 # --- F4: keymap assets byte-identical ---------------------------------------
 # CLAUDE.md: "these two files are currently byte-identical and must stay in sync."

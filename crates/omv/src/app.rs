@@ -8,7 +8,7 @@ use omv_core::{Editor, Effect, LspIntent, Mode, Picker as PickerRequest, Split, 
 use omv_find::{display_path, walk_files};
 use omv_lsp::lsp_types::Diagnostic;
 use omv_lsp::{Client as LspClient, LspPosition, Notification, Registry, Request as LspRequest};
-use omv_syntax::{Highlighter, Span};
+use omv_syntax::{Highlighter, MarkdownLine, Span, markdown};
 
 use crate::event::{AppEvent, to_key};
 use crate::explorer::Explorer;
@@ -46,11 +46,30 @@ pub struct App {
     pub match_ranges: Vec<std::ops::Range<usize>>,
     pub diagnostics: HashMap<PathBuf, Vec<Diagnostic>>,
     pub diagnostics_visible: bool,
+    /// `Some(id)` means the Markdown render pane is visible, attached to
+    /// window `id` — the one it was toggled on from, not whichever window
+    /// happens to be focused when the buffer changes or the pane is drawn.
+    /// It is not a member of `Windows`' tree (see REQ-003/REQ-008): the pane
+    /// is never focusable and never independently addressable.
+    pub markdown_render: Option<WindowId>,
     pub hover: Option<String>,
     /// Syntax spans per buffer index. Kept per buffer rather than for the
     /// current one alone: a split can show two files at once, and only the
     /// focused buffer's text can change under us.
     pub highlights: HashMap<usize, Vec<Span>>,
+    /// Rendered Markdown per buffer index, for the render pane to draw. Keyed
+    /// by buffer for the same reason `highlights` is, and one reason more: the
+    /// pane is attached to a *window*, and a window's buffer can change under
+    /// it, so "the document I parsed" has to be identified by which buffer it
+    /// came from rather than by when it was parsed.
+    pub markdown: HashMap<usize, Vec<MarkdownLine>>,
+    /// Counts calls to `refresh_markdown_for` that actually parsed something,
+    /// so `the_document_is_parsed_once_per_batch_and_never_by_drawing` can
+    /// pin the render pane to "once per effect batch, never from drawing". A
+    /// field rather than a `static`: the test runner is parallel, and a
+    /// `static` counter would leak state between tests sharing a process.
+    #[cfg(test)]
+    pub markdown_parses: usize,
     /// How the text area is divided, and which division has focus.
     pub windows: Windows,
     pub status: String,
@@ -95,8 +114,12 @@ impl App {
             match_ranges: Vec::new(),
             diagnostics: HashMap::new(),
             diagnostics_visible: false,
+            markdown_render: None,
             hover: None,
             highlights: HashMap::new(),
+            markdown: HashMap::new(),
+            #[cfg(test)]
+            markdown_parses: 0,
             windows: Windows::new(),
             status: String::new(),
             quit: false,
@@ -118,6 +141,11 @@ impl App {
                 self.set_scroll(0);
                 self.sync_focused_window();
                 self.refresh_highlights();
+                // Bypasses the effect loop the same way `refresh_highlights`
+                // does just above, and for the same reason: the picker, the
+                // explorer, and `E::Definition` all call this directly, never
+                // through `apply_effects`.
+                self.refresh_markdown_pane();
                 self.announce_to_lsp();
             }
             Err(e) => self.status = format!("E: {}: {e}", path.display()),
@@ -508,10 +536,20 @@ impl App {
                     self.editor.current = index;
                     self.sync_focused_window();
                     self.refresh_highlights();
+                    self.refresh_markdown_pane();
                     self.scroll_to_cursor();
                 }
             }
         }
+    }
+
+    /// Test hook: `activate_payload` is private, but `handle_picker_key`'s
+    /// `Enter` arm calls it directly, bypassing `apply_effects` entirely —
+    /// tests need to drive that exact path rather than `apply_effects_for_test`
+    /// to prove the render cache follows it too.
+    #[cfg(test)]
+    pub fn activate_payload_for_test(&mut self, payload: Payload) {
+        self.activate_payload(payload);
     }
 
     // ---- effects ------------------------------------------------------------
@@ -548,6 +586,20 @@ impl App {
                     self.diagnostics_visible = !self.diagnostics_visible;
                 }
                 Effect::ToggleTerminal => self.toggle_terminal(),
+                Effect::ToggleMarkdownRender => {
+                    // Toggling on always attaches to whoever is focused *now*;
+                    // toggling off clears the flag regardless of focus, so a
+                    // pane opened on window A and left visible after focus
+                    // moves to B still closes on the second press. Populating
+                    // the cache for a newly-toggled-on pane is not special-cased
+                    // here: the generic refresh at the end of this batch (after
+                    // `sync_focused_window()`) does it, the same as it does for
+                    // every other buffer switch this loop produces.
+                    self.markdown_render = match self.markdown_render {
+                        Some(_) => None,
+                        None => Some(self.windows.focused_id()),
+                    };
+                }
                 Effect::ShowKeys => {
                     // Rebuilt on each open so it reflects the live keymap.
                     self.help = Some(Help::build(&self.config));
@@ -567,11 +619,15 @@ impl App {
                     let id = self.windows.focused_id();
                     if self.windows.close(id) {
                         self.focus_window(self.windows.focused_id());
+                        self.forget_markdown_pane_if_its_window_is_gone();
                     } else {
                         self.status = "E: cannot close the last window".into();
                     }
                 }
-                Effect::OnlyWindow => self.windows.only(self.windows.focused_id()),
+                Effect::OnlyWindow => {
+                    self.windows.only(self.windows.focused_id());
+                    self.forget_markdown_pane_if_its_window_is_gone();
+                }
                 Effect::OpenSubstitute => self.open_substitute(),
                 Effect::Lsp(intent) => self.send_lsp(intent),
                 Effect::Quit { force } => {
@@ -589,6 +645,12 @@ impl App {
         // `:bn`, a jump to a definition — and the focused window is the view
         // that just happened, so it records the result unconditionally.
         self.sync_focused_window();
+        // One generic refresh per batch, after the window's buffer is known to
+        // be current: this is what makes `:bn`/`:bp` (no `BufferChanged` at
+        // all) and every ordinary edit (`BufferChanged`, funnelled through
+        // here by `handle_editor_key`) both land without a special case per
+        // effect. A no-op while the pane is hidden.
+        self.refresh_markdown_pane();
     }
 
     pub fn scroll_to_cursor(&mut self) {
@@ -771,6 +833,77 @@ impl App {
     /// Syntax spans for one buffer; empty for a language we cannot parse.
     pub fn highlights_for(&self, buffer: usize) -> &[Span] {
         self.highlights.get(&buffer).map_or(&[], Vec::as_slice)
+    }
+
+    // ---- markdown -----------------------------------------------------------
+
+    /// Re-parse one buffer for the render pane. Not gated on the file's
+    /// extension (REQ-006): the pane is asked for by hand, so whatever text is
+    /// there is what gets rendered.
+    pub fn refresh_markdown_for(&mut self, index: usize) {
+        let Some(buffer) = self.editor.buffers.get(index) else {
+            // No buffer, no document: drop the entry rather than leave the
+            // pane drawing a file that is gone.
+            self.markdown.remove(&index);
+            return;
+        };
+        let lines = markdown::render(&buffer.rope.to_string());
+        self.markdown.insert(index, lines);
+        // Only counted here, on an actual parse — not on the early return
+        // above, which never touches `markdown::render`.
+        #[cfg(test)]
+        {
+            self.markdown_parses += 1;
+        }
+    }
+
+    /// Re-parse the render pane's document, if it is visible. Reads the
+    /// buffer from the window the pane is *attached to* rather than
+    /// `editor.current`, so a pane left on an unfocused window keeps tracking
+    /// that window's buffer instead of whichever one the user is now editing
+    /// (REQ-005). A no-op while the pane is hidden, so this costs nothing at
+    /// the scale CLAUDE.md already accepts for tree-sitter/LSP full-document
+    /// sync only applies while somebody is actually watching it.
+    ///
+    /// This is the single call at the end of every effect batch, plus one
+    /// call beside each place that changes a window's buffer *outside* that
+    /// loop (`open_path`, `activate_payload`'s `Payload::Buffer` arm, and the
+    /// LSP formatting path in `apply_text_edits`) — see task-04's notes on why
+    /// the effect loop alone does not see every buffer switch. `focus_window`
+    /// needs no call of its own: both of its callers already run inside
+    /// `apply_effects`, so the end-of-batch call covers it for free, and a
+    /// second call there would parse the same buffer twice in one batch.
+    fn refresh_markdown_pane(&mut self) {
+        let Some(id) = self.markdown_render else {
+            return;
+        };
+        let Some(window) = self.windows.get(id) else {
+            return;
+        };
+        self.refresh_markdown_for(window.buffer);
+    }
+
+    /// REQ-008: `window_close`/`window_only` can remove the window the render
+    /// pane is attached to without any effect that names the pane itself —
+    /// `Windows` has no idea the pane exists (it must not, per the
+    /// Constraints in the feature spec), so `App` has to notice on its own,
+    /// right after the tree mutates, that the id it was watching is gone.
+    /// Checking `windows.get(id)` directly rather than tracking "did this
+    /// operation touch my window" keeps this correct regardless of which
+    /// window-tree operation caused it, and a no-op whenever the pane is
+    /// hidden or its window survived.
+    fn forget_markdown_pane_if_its_window_is_gone(&mut self) {
+        if let Some(id) = self.markdown_render
+            && self.windows.get(id).is_none()
+        {
+            self.markdown_render = None;
+        }
+    }
+
+    /// The rendered document for one buffer; empty when nothing has parsed it
+    /// yet. Total, so the renderer never has to ask whether the cache is warm.
+    pub fn markdown_for(&self, buffer: usize) -> &[MarkdownLine] {
+        self.markdown.get(&buffer).map_or(&[], Vec::as_slice)
     }
 
     // ---- lsp ----------------------------------------------------------------
@@ -981,6 +1114,10 @@ impl App {
         for index in touched {
             self.refresh_highlights_for(index);
         }
+        // Reached from `handle_lsp_event`, never from `apply_effects` — same
+        // reason `open_path` needs its own call rather than relying on the
+        // generic end-of-batch one.
+        self.refresh_markdown_pane();
         self.notify_lsp_change();
         self.scroll_to_cursor();
     }

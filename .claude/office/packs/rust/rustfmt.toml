@@ -1,0 +1,4 @@
+# Installed by the-office. Stable options only, so `cargo fmt` works on stable.
+max_width = 100
+edition = "2021"
+use_field_init_shorthand = true

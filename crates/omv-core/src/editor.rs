@@ -22,6 +22,8 @@ pub enum Effect {
     ToggleDiagnostics,
     /// Show or hide the terminal panel, starting a shell if none is running.
     ToggleTerminal,
+    /// Show or hide the read-only Markdown render pane beside the focused window.
+    ToggleMarkdownRender,
     /// Show the key-binding reference.
     ShowKeys,
     /// Open the find-and-replace prompt.
@@ -655,6 +657,7 @@ impl Editor {
             Action::FocusExplorer => vec![Effect::FocusExplorer],
             Action::ToggleDiagnostics => vec![Effect::ToggleDiagnostics],
             Action::ToggleTerminal => vec![Effect::ToggleTerminal],
+            Action::ToggleMarkdownRender => vec![Effect::ToggleMarkdownRender],
             Action::ShowKeys => vec![Effect::ShowKeys],
             Action::FindFiles => vec![Effect::OpenPicker(Picker::Files)],
             Action::FindText => vec![Effect::OpenPicker(Picker::Text)],
@@ -939,6 +942,7 @@ impl Editor {
             // name and `:!keys` is accepted as an alias rather than claiming `!`.
             "keys" | "!keys" | "map" => self.dispatch(Action::ShowKeys, None),
             "term" | "terminal" => self.dispatch(Action::ToggleTerminal, None),
+            "md" | "markdown" => self.dispatch(Action::ToggleMarkdownRender, None),
             "bn" => self.dispatch(Action::NextBuffer, None),
             "bp" => self.dispatch(Action::PrevBuffer, None),
             // `:vsp` and `:hsp` are the names the feature is asked for; vim's own

@@ -1,0 +1,45 @@
+{
+  "stack": "typescript",
+  "detect": ["package.json"],
+  "controls": [
+    {
+      "id": "formatter", "label": "prettier", "cell": "computational-sensor",
+      "files": [".prettierrc.json"], "check": "npx prettier --check .",
+      "fix": "npx prettier --write .", "cost": "low", "legacy_order": 1,
+      "note": "Mechanical and reviewable in one commit. Add the reformat commit to .git-blame-ignore-revs so history stays readable."
+    },
+    {
+      "id": "linter", "label": "eslint", "cell": "computational-sensor",
+      "files": ["eslint.config.mjs"], "check": "npx eslint .",
+      "fix": "npx eslint . --fix", "cost": "low", "legacy_order": 2,
+      "note": "Flat config, recommended set only. Type-aware rules are a later task: they need a working tsconfig and cost real time per run."
+    },
+    {
+      "id": "types", "label": "tsc --noEmit", "cell": "computational-sensor",
+      "files": ["tsconfig.strict.json"], "check": "npx tsc --noEmit",
+      "cost": "medium", "legacy_order": 4,
+      "note": "The single highest-value control in this stack. On legacy JS, adopt via tsconfig.strict.json over a narrowing include list rather than flipping strict on the root config."
+    },
+    {
+      "id": "tests", "label": "vitest", "cell": "computational-sensor",
+      "check": "npx vitest run", "cost": "medium", "legacy_order": 3,
+      "note": "The behaviour harness. Without it the type checker only proves shapes, not conduct."
+    },
+    {
+      "id": "coverage", "label": "coverage floor", "cell": "computational-sensor",
+      "check": "npx vitest run --coverage", "cost": "medium", "legacy_order": 5,
+      "note": "Set thresholds to the CURRENT measured value and ratchet upward as a tracked task."
+    },
+    {
+      "id": "pre-commit-hook", "label": "lefthook", "cell": "computational-sensor",
+      "files": ["lefthook.yml"], "check": "npx lefthook run pre-commit",
+      "cost": "low", "legacy_order": 6,
+      "note": "Install after the underlying tools are clean, never before."
+    },
+    {
+      "id": "guides", "label": "CLAUDE.md conventions", "cell": "inferential-guide",
+      "files": ["GUIDE.md"], "cost": "low", "legacy_order": 0,
+      "note": "Merged into the repo's CLAUDE.md."
+    }
+  ]
+}

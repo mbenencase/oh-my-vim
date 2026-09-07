@@ -1,0 +1,45 @@
+{
+  "stack": "python",
+  "detect": ["pyproject.toml", "setup.py", "requirements.txt"],
+  "controls": [
+    {
+      "id": "formatter", "label": "ruff format", "cell": "computational-sensor",
+      "files": ["ruff.toml"], "check": "ruff format --check .",
+      "fix": "ruff format .", "cost": "low", "legacy_order": 1,
+      "note": "Pure formatting. Safe to enforce repo-wide on day one because the fix is mechanical and reviewable in one commit."
+    },
+    {
+      "id": "linter", "label": "ruff check", "cell": "computational-sensor",
+      "files": ["ruff.toml"], "check": "ruff check .",
+      "fix": "ruff check --fix .", "cost": "low", "legacy_order": 2,
+      "note": "Start with the E/F/I rule sets only. Widening the rule set on a legacy repo is a separate, later task."
+    },
+    {
+      "id": "types", "label": "mypy", "cell": "computational-sensor",
+      "files": ["mypy.ini"], "check": "mypy .",
+      "cost": "medium", "legacy_order": 4,
+      "note": "On legacy code enable per-module, not globally. mypy.ini ships with strict off and a per-module opt-in block."
+    },
+    {
+      "id": "tests", "label": "pytest", "cell": "computational-sensor",
+      "check": "pytest -q", "cost": "medium", "legacy_order": 3,
+      "note": "The behaviour harness. Without it every other control only regulates form, not correctness."
+    },
+    {
+      "id": "coverage", "label": "coverage floor", "cell": "computational-sensor",
+      "check": "pytest --cov --cov-fail-under=0 -q", "cost": "medium", "legacy_order": 5,
+      "note": "Ship with --cov-fail-under set to the CURRENT measured value, then ratchet. A floor above current coverage blocks every commit on arrival."
+    },
+    {
+      "id": "pre-commit-hook", "label": "pre-commit", "cell": "computational-sensor",
+      "files": [".pre-commit-config.yaml"], "check": "pre-commit run --all-files",
+      "cost": "low", "legacy_order": 6,
+      "note": "Shifts the fast controls left. Install last: a hook that fires before the underlying tools are clean makes the repo unusable."
+    },
+    {
+      "id": "guides", "label": "CLAUDE.md conventions", "cell": "inferential-guide",
+      "files": ["GUIDE.md"], "cost": "low", "legacy_order": 0,
+      "note": "Merged into the repo's CLAUDE.md. Costs nothing to install and starts steering immediately."
+    }
+  ]
+}

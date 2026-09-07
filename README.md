@@ -36,7 +36,8 @@ Or build it yourself with `make install` (release build + copy to `/usr/local/bi
 | **Syntax** | tree-sitter (Rust, JSON) |
 | **Windows** | `:vsp` / `:hsp` split the view; `<C-w>hjkl` to move between them |
 | **Terminal** | `<C-j>` opens a real shell docked at the bottom, VS Code style |
-| **Ex commands** | `:w :q :q! :wq :e <path> :bn :bp :42 :keys :vsp :hsp :close :only :term` |
+| **Markdown render** | `<leader>m` toggles a read-only rendered pane beside the source window |
+| **Ex commands** | `:w :q :q! :wq :e <path> :bn :bp :42 :keys :vsp :hsp :close :only :term :md` |
 | **Key reference** | `:keys` (or `<leader>?`) lists every binding and what it does |
 
 ## Windows
@@ -69,6 +70,20 @@ and arrow-key history all behave the way they do in a terminal.
 
 End the shell (`exit`, or `<C-d>` at an empty prompt) and the panel closes with
 it; the next `<C-j>` starts a fresh one. `:term` toggles the same panel.
+
+## Markdown render
+
+`<leader>m` (or `:md` / `:markdown`) toggles a read-only rendered Markdown pane
+beside the source window. The render pane appears as a vertical split to the right
+of the raw text, never takes focus, and is never reachable via directional window
+navigation — all editing stays in the raw text pane. As you edit, the render
+updates live to show the formatted version.
+
+The render pane displays headings (visually distinguished by level), bold and
+italic emphasis, ordered and unordered lists, fenced code blocks, and horizontal
+rules. It does not render tables, blockquotes, links, images, footnotes, or
+embedded HTML, and syntax highlighting inside code fences is not supported in v1.
+Plain prose with no Markdown structure appears in the render pane as plain text.
 
 ## Find and replace
 
@@ -187,7 +202,7 @@ Three ideas hold it together:
 ## Testing
 
 ```
-cargo test --workspace     # 83 tests
+cargo test --workspace     # 127 tests
 ```
 
 `omv-lsp` ships a mock language server (`omv-mock-lsp`) so the client's framing,

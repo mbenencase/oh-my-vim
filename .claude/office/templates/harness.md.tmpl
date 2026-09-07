@@ -1,0 +1,60 @@
+# Harness manifest
+
+<!--
+  Written by the Office Manager, maintained by the Janitor.
+  This file is the single place that answers "what regulates this repo, and why".
+  Every row names which cell of the control matrix it occupies, because a
+  harness made only of inferential sensors is the failure mode this exists to
+  prevent.
+-->
+
+**Repo class:** {{CLASS}}  ·  **Stacks:** {{STACKS}}
+**Harnessability:** {{SCORE}}/100 ({{BAND}})
+**Last audited:** {{DATE}} · `office audit`
+
+## Score components
+
+| Component | Score | Max | Reading |
+|---|---|---|---|
+| Typing | {{TYPING}} | 25 | How much a compiler proves before a test runs |
+| Boundaries | {{BOUNDARIES}} | 20 | Whether module structure is legible to an agent |
+| Tests | {{TESTS}} | 25 | Whether behaviour is verifiable at all |
+| Build | {{BUILD}} | 15 | Whether a checkout reproduces |
+| Controls | {{CONTROLS}} | 15 | Share of the stack's expected controls present |
+
+## Controls in place
+
+| Control | Cell | Check command | Installed |
+|---|---|---|---|
+<!-- one row per control; cell is one of:
+     computational-guide | computational-sensor | inferential-guide | inferential-sensor -->
+
+## Gaps, and why they are still gaps
+
+<!--
+  A gap left open on purpose is a decision; a gap left open by accident is a
+  bug. Record which each one is. "Not worth it for this repo" is a legitimate
+  entry — an unexplained blank is not.
+-->
+
+| Gap | Cost | Why not yet |
+|---|---|---|
+
+## Adoption order
+
+<!--
+  Legacy repos only. Cheap high-signal controls first, broad enforcement last.
+  Turning on strict enforcement across a legacy repo produces an error wall,
+  and the first person who hits it disables the whole harness.
+-->
+
+## Ratchets
+
+<!--
+  Any control whose threshold is pinned to a current measured value rather than
+  a target. Record the current number and the target, so the Janitor can raise
+  it as backlog clears instead of it silently staying at the floor forever.
+-->
+
+| Control | Current | Target |
+|---|---|---|

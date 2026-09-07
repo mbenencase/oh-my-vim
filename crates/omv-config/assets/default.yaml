@@ -98,6 +98,7 @@ keys:
     "<leader>fb": find_buffers
     "<leader>d": toggle_diagnostics
     "<C-j>": toggle_terminal
+    "<leader>m": toggle_markdown_render
     "<leader>?": show_keys
 
     # windows

@@ -169,10 +169,11 @@ fn event_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::picker::PickerKind;
+    use crate::picker::{Payload, PickerKind};
     use omv_core::Action;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc::channel;
 
     fn test_app() -> App {
@@ -657,6 +658,285 @@ mod tests {
         assert_eq!(app.windows.count(), 1, ":only drops the rest");
     }
 
+    // ---- markdown render pane ----------------------------------------------
+
+    /// Like `screen`, but keeps every cell's style. The render pane's contract
+    /// is that constructs *look* different, which the flattened string throws
+    /// away, so the styled view is what those assertions read.
+    fn screen_cells(app: &mut App) -> Vec<Vec<(String, ratatui::style::Style)>> {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| ui::render(frame, app)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .chunks(80)
+            .map(|row| {
+                row.iter()
+                    .map(|cell| (cell.symbol().to_string(), cell.style()))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Column of the seam between the raw text and the render pane, read off
+    /// the drawn frame rather than recomputed, so the assertions describe what
+    /// a user would see.
+    fn seam_column(cells: &[Vec<(String, ratatui::style::Style)>]) -> usize {
+        cells[0]
+            .iter()
+            .position(|(symbol, _)| symbol == "\u{2502}")
+            .unwrap_or_else(|| panic!("no seam on the top row; the pane was not drawn"))
+    }
+
+    /// The cells inside the pane's border: rows between its top and bottom
+    /// edges, columns between its left and right ones. Derived from the drawn
+    /// seam and the frame size rather than from the layout constants, so a
+    /// test asserts on what a user would see.
+    fn pane_interior(
+        cells: &[Vec<(String, ratatui::style::Style)>],
+    ) -> Vec<&[(String, ratatui::style::Style)]> {
+        let seam = seam_column(cells);
+        let right_border = cells[0].len() - 1;
+        // The last two rows of the frame are the status and command lines; the
+        // row above them is the pane's bottom border.
+        cells[1..cells.len() - 3]
+            .iter()
+            .map(|row| &row[seam + 2..right_border])
+            .collect()
+    }
+
+    /// The style of the first non-blank cell the pane drew for one source line.
+    fn render_style(
+        cells: &[Vec<(String, ratatui::style::Style)>],
+        line: usize,
+    ) -> ratatui::style::Style {
+        pane_interior(cells)[line]
+            .iter()
+            .find(|(symbol, _)| !symbol.trim().is_empty())
+            .map(|(_, style)| *style)
+            .unwrap_or_else(|| panic!("source line {line} rendered blank"))
+    }
+
+    /// The text the render pane drew for one source line.
+    fn render_text_of(cells: &[Vec<(String, ratatui::style::Style)>], line: usize) -> String {
+        pane_interior(cells)[line]
+            .iter()
+            .map(|(symbol, _)| symbol.as_str())
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    /// `<leader>m` through the real keymap: leader is `<Space>` by default.
+    fn press_leader_m(app: &mut App) {
+        press(app, crossterm::event::KeyCode::Char(' '));
+        press(app, crossterm::event::KeyCode::Char('m'));
+    }
+
+    /// One buffer holding every construct v1 renders, one per line, so a test
+    /// can address a construct by its line number.
+    const CONSTRUCTS: &str = "# Heading\n**bold** text\n*italic* text\n- item\n1. item\n```\ncode\n```\n---\nplain text\n";
+
+    #[test]
+    fn the_render_pane_appears_beside_the_raw_text_and_leaves_again() {
+        let mut app = app_with_text("# Title\n");
+        let out = screen(&mut app);
+        assert!(
+            !out.contains("Markdown"),
+            "nothing is rendered until it is asked for:\n{out}"
+        );
+        let full_width = app.windows.focused().area.width;
+
+        press_leader_m(&mut app);
+        assert_eq!(
+            app.markdown_render,
+            Some(app.windows.focused_id()),
+            "<leader>m must attach the pane to the focused window"
+        );
+        let out = screen(&mut app);
+        assert!(out.contains("Markdown"), "the pane must be framed:\n{out}");
+        assert!(
+            out.contains("# Title"),
+            "and the raw source must still be visible beside it:\n{out}"
+        );
+        assert!(
+            app.windows.focused().area.width < full_width,
+            "the source window's own rect must be the thing that narrowed"
+        );
+        assert_eq!(
+            app.windows.count(),
+            1,
+            "the pane is not a window; the tree must not have grown"
+        );
+
+        press_leader_m(&mut app);
+        let out = screen(&mut app);
+        assert!(!out.contains("Markdown"), "a second press hides it:\n{out}");
+        assert_eq!(
+            app.windows.focused().area.width,
+            full_width,
+            "and the window returns to its full width"
+        );
+    }
+
+    #[test]
+    fn the_md_command_shows_and_hides_the_same_pane() {
+        let mut app = app_with_text("# Title\n");
+        screen(&mut app);
+        let full_width = app.windows.focused().area.width;
+
+        ex(&mut app, "md");
+        let out = screen(&mut app);
+        assert!(out.contains("Markdown"), ":md must show the pane:\n{out}");
+
+        // The long spelling is the same toggle, not a second pane.
+        ex(&mut app, "markdown");
+        let out = screen(&mut app);
+        assert!(
+            !out.contains("Markdown"),
+            ":markdown must hide the same pane:\n{out}"
+        );
+        assert_eq!(app.markdown_render, None);
+        assert_eq!(app.windows.focused().area.width, full_width);
+    }
+
+    #[test]
+    fn raw_source_on_the_left_and_the_render_on_the_right() {
+        let mut app = app_with_text("**bold**\n");
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+        let seam = seam_column(&cells);
+
+        let raw: String = cells[0][..seam]
+            .iter()
+            .map(|(symbol, _)| symbol.as_str())
+            .collect();
+        assert!(
+            raw.contains("**bold**"),
+            "the literal source must stay to the left of the seam: {raw:?}"
+        );
+        let rendered = render_text_of(&cells, 0);
+        assert_eq!(
+            rendered, "bold",
+            "and the collapsed render must be to its right"
+        );
+    }
+
+    #[test]
+    fn every_v1_construct_is_styled_distinctly_in_the_render_columns() {
+        let mut app = app_with_text(CONSTRUCTS);
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+
+        // (source line, what lives there) — `plain text` is the baseline every
+        // other construct has to differ from.
+        let constructs = [
+            (0, "heading"),
+            (1, "bold"),
+            (2, "italic"),
+            (3, "unordered item"),
+            (4, "ordered item"),
+            (6, "fenced code"),
+            (8, "horizontal rule"),
+            (9, "plain text"),
+        ];
+        let styles: Vec<_> = constructs
+            .iter()
+            .map(|(line, name)| (name, render_style(&cells, *line)))
+            .collect();
+
+        for (i, (a, style_a)) in styles.iter().enumerate() {
+            for (b, style_b) in styles.iter().skip(i + 1) {
+                assert_ne!(style_a, style_b, "{a} and {b} must not render identically");
+            }
+        }
+    }
+
+    #[test]
+    fn heading_levels_are_styled_apart_from_each_other() {
+        let mut app = app_with_text("# a\n## b\n### c\n#### d\n##### e\n###### f\n");
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+
+        let styles: Vec<_> = (0..6).map(|line| render_style(&cells, line)).collect();
+        for (i, a) in styles.iter().enumerate() {
+            for (j, b) in styles.iter().enumerate().skip(i + 1) {
+                assert_ne!(a, b, "h{} and h{} must differ", i + 1, j + 1);
+            }
+        }
+    }
+
+    #[test]
+    fn the_render_pane_ignores_the_files_extension() {
+        // REQ-006: the toggle is asked for by hand, so it never consults the path.
+        for path in [None, Some("notes.txt")] {
+            let mut app = app_with_text("# Title\n");
+            app.editor.buffer_mut().path = path.map(|p| std::env::current_dir().unwrap().join(p));
+            ex(&mut app, "md");
+            let out = screen(&mut app);
+            assert!(
+                out.contains("Markdown"),
+                "the pane must open for {path:?}:\n{out}"
+            );
+            let cells = screen_cells(&mut app);
+            assert_eq!(
+                render_text_of(&cells, 0),
+                "# Title",
+                "and render the heading for {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_buffer_renders_an_empty_pane_rather_than_failing() {
+        let mut app = app_with_text("");
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+        let seam = seam_column(&cells);
+
+        assert!(
+            cells[0][seam..].iter().any(|(symbol, _)| symbol == "M"),
+            "the pane is still framed and titled"
+        );
+        for (line, row) in pane_interior(&cells).iter().enumerate() {
+            let drawn: String = row.iter().map(|(symbol, _)| symbol.as_str()).collect();
+            assert_eq!(
+                drawn.trim(),
+                "",
+                "an empty buffer draws nothing inside the pane, but row {line} has content"
+            );
+        }
+    }
+
+    #[test]
+    fn a_scroll_past_the_end_of_the_cache_draws_nothing_rather_than_panicking() {
+        let mut app = app_with_text("# short\n");
+        ex(&mut app, "md");
+        screen(&mut app);
+
+        // A jump into a longer file — the find-text picker, goto-definition —
+        // moves the window to another buffer and scrolls it there, without
+        // passing anywhere that refreshes this cache. The pane must survive a
+        // scroll well past the document it still holds.
+        app.editor.buffers.push(omv_core::Buffer::empty());
+        app.editor.buffers[1].insert(0, &"line\n".repeat(500));
+        app.editor.current = 1;
+        let window = app.windows.focused_mut();
+        window.buffer = 1;
+        window.scroll = 400;
+
+        let cells = screen_cells(&mut app);
+        for (line, row) in pane_interior(&cells).iter().enumerate() {
+            let drawn: String = row.iter().map(|(symbol, _)| symbol.as_str()).collect();
+            assert_eq!(
+                drawn.trim(),
+                "",
+                "a stale, too-short cache draws an empty pane, but row {line} has content"
+            );
+        }
+    }
+
     // ---- terminal panel ----------------------------------------------------
 
     /// Like `test_app`, but keeps the receiving end so a test can pump the
@@ -825,5 +1105,724 @@ mod tests {
         let picker = app.picker.as_ref().expect("picker");
         assert_eq!(picker.kind, PickerKind::Buffers);
         assert_eq!(picker.matches.len(), 1, "one scratch buffer is open");
+    }
+
+    #[test]
+    fn leader_m_toggles_the_markdown_render_flag() {
+        let mut app = app_with_text("# Heading\n");
+        assert_eq!(app.markdown_render, None, "hidden until toggled");
+
+        press(&mut app, crossterm::event::KeyCode::Char(' '));
+        press(&mut app, crossterm::event::KeyCode::Char('m'));
+        assert_eq!(
+            app.markdown_render,
+            Some(app.windows.focused_id()),
+            "<leader>m must attach the pane to the focused window"
+        );
+
+        press(&mut app, crossterm::event::KeyCode::Char(' '));
+        press(&mut app, crossterm::event::KeyCode::Char('m'));
+        assert_eq!(
+            app.markdown_render, None,
+            "pressing <leader>m again must hide it"
+        );
+    }
+
+    #[test]
+    fn the_md_command_toggles_the_same_flag() {
+        let mut app = app_with_text("# Heading\n");
+
+        ex(&mut app, "md");
+        assert_eq!(app.markdown_render, Some(app.windows.focused_id()));
+
+        ex(&mut app, "markdown");
+        assert_eq!(
+            app.markdown_render, None,
+            ":md and :markdown must drive the same flag"
+        );
+    }
+
+    #[test]
+    fn toggling_on_records_the_focused_window_and_off_clears_it() {
+        let mut app = app_with_text("# Heading\n");
+        ex(&mut app, "vsp");
+        screen(&mut app); // lays out the windows, which directional focus reads
+        let source = app.windows.focused_id();
+
+        ex(&mut app, "md");
+        assert_eq!(
+            app.markdown_render,
+            Some(source),
+            "the pane must remember the window it was toggled on from"
+        );
+
+        // Move focus to the sibling window before toggling off.
+        press_ctrl(&mut app, 'w');
+        press(&mut app, crossterm::event::KeyCode::Char('h'));
+        assert_ne!(
+            app.windows.focused_id(),
+            source,
+            "focus must actually have moved for this test to prove anything"
+        );
+
+        ex(&mut app, "md");
+        assert_eq!(
+            app.markdown_render, None,
+            "toggling off clears the flag regardless of which window is focused"
+        );
+    }
+
+    // ---- markdown render pane: keeping it live (task-04) -------------------
+
+    /// A markdown fixture written to the OS temp directory rather than the
+    /// repo, named uniquely so parallel tests never collide over one file.
+    fn write_temp_markdown(content: &str) -> std::path::PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "omv-markdown-pane-test-{}-{id}.md",
+            std::process::id()
+        ));
+        std::fs::write(&path, content).expect("write temp markdown fixture");
+        path
+    }
+
+    #[test]
+    fn typing_updates_the_render_pane_without_toggling_it() {
+        let mut app = app_with_text("plain\n");
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+        assert_eq!(render_text_of(&cells, 0), "plain");
+
+        // Cursor starts at 0 (`app_with_text`); enter insert mode and type a
+        // heading marker in front of the existing text. No toggle in between.
+        press(&mut app, crossterm::event::KeyCode::Char('i'));
+        type_text(&mut app, "# ");
+
+        let cells = screen_cells(&mut app);
+        assert_eq!(
+            render_text_of(&cells, 0),
+            "# plain",
+            "the render pane must pick up the new heading on the very next frame"
+        );
+    }
+
+    #[test]
+    fn deleting_a_heading_removes_it_from_the_render_pane() {
+        let mut app = app_with_text("# plain\n");
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+        assert_eq!(render_text_of(&cells, 0), "# plain");
+
+        // Put the cursor right after the heading markup and delete it — the
+        // reverse of the previous test, so the cache is proved to be rebuilt
+        // wholesale rather than only ever appended to.
+        app.editor.buffer_mut().cursor = 2;
+        press(&mut app, crossterm::event::KeyCode::Char('i'));
+        press(&mut app, crossterm::event::KeyCode::Backspace);
+        press(&mut app, crossterm::event::KeyCode::Backspace);
+
+        let cells = screen_cells(&mut app);
+        assert_eq!(
+            render_text_of(&cells, 0),
+            "plain",
+            "removing the markup must remove the heading from the render, not leave it behind"
+        );
+    }
+
+    #[test]
+    fn the_render_pane_follows_the_source_window_to_another_buffer() {
+        let mut app = app_with_text("# First\n");
+        app.editor.buffers.push(omv_core::Buffer::empty());
+        app.editor.buffers[1].insert(0, "# Second\n");
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+        assert_eq!(
+            render_text_of(&cells, 0),
+            "# First",
+            "the pane starts on the buffer it was toggled on for"
+        );
+
+        // `:bn` switches the focused window's buffer without emitting a
+        // `BufferChanged` effect at all.
+        ex(&mut app, "bn");
+        let cells = screen_cells(&mut app);
+        assert_eq!(
+            render_text_of(&cells, 0),
+            "# Second",
+            "the pane must follow the source window to its new buffer"
+        );
+    }
+
+    #[test]
+    fn the_render_pane_scrolls_with_the_source_window() {
+        let mut body = String::from("# Early\n");
+        for n in 0..80 {
+            body.push_str(&format!("filler {n}\n"));
+        }
+        body.push_str("# Late\n");
+        let mut app = app_with_text(&body);
+        ex(&mut app, "md");
+        screen(&mut app); // establishes text_height, which scroll_to_cursor needs
+
+        // Jump the source window to the last line, the way `G` or a search
+        // hit would; task-01's one-line-per-source-line invariant is what
+        // makes this need no scroll machinery of its own.
+        let buf = app.editor.buffer_mut();
+        let last = buf.last_line();
+        buf.cursor = buf.line_start(last);
+        app.scroll_to_cursor();
+
+        let cells = screen_cells(&mut app);
+        let pane_text: String = pane_interior(&cells)
+            .iter()
+            .flat_map(|row| row.iter().map(|(symbol, _)| symbol.as_str()))
+            .collect();
+        assert!(
+            !pane_text.contains("Early"),
+            "scrolling past the top heading must drop it from the pane:\n{pane_text}"
+        );
+        assert!(
+            pane_text.contains("Late"),
+            "and bring the bottom heading into view:\n{pane_text}"
+        );
+    }
+
+    #[test]
+    fn opening_another_file_outside_the_effect_loop_refreshes_the_render_pane() {
+        let mut app = app_with_text("# Old\n");
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+        assert_eq!(render_text_of(&cells, 0), "# Old");
+
+        let path = write_temp_markdown("# New file\n");
+        // The picker's `Enter` arm calls `activate_payload` directly, never
+        // through `apply_effects` — drive that exact path, not
+        // `apply_effects_for_test`.
+        app.activate_payload_for_test(Payload::File(path.clone()));
+
+        let cells = screen_cells(&mut app);
+        assert_eq!(
+            render_text_of(&cells, 0),
+            "# New file",
+            "the pane must show the newly opened file, not the stale one"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn switching_buffers_through_the_picker_refreshes_the_render_pane() {
+        let mut app = app_with_text("# First\n");
+        app.editor.buffers.push(omv_core::Buffer::empty());
+        app.editor.buffers[1].insert(0, "# Second\n");
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+        assert_eq!(render_text_of(&cells, 0), "# First");
+
+        // The buffers picker's `Enter` arm calls `activate_payload` directly,
+        // bypassing `apply_effects` and its generic end-of-batch refresh —
+        // drive that exact path, not `apply_effects_for_test`.
+        app.activate_payload_for_test(Payload::Buffer(1));
+
+        let cells = screen_cells(&mut app);
+        assert_eq!(
+            render_text_of(&cells, 0),
+            "# Second",
+            "switching buffers through the picker must refresh the render pane"
+        );
+    }
+
+    #[test]
+    fn lsp_formatting_refreshes_the_render_pane_outside_the_effect_loop() {
+        use omv_lsp::lsp_types::{Position, Range, TextEdit};
+        let mut app = app_with_text("# Old\n");
+        // `apply_text_edits` resolves an empty-path edit to "the buffer that
+        // asked", which requires the current buffer to actually have a path.
+        app.editor.buffer_mut().path = Some(std::env::current_dir().unwrap().join("scratch.md"));
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+        assert_eq!(render_text_of(&cells, 0), "# Old");
+
+        // `handle_lsp_event`'s `E::Edits` arm reaches `apply_text_edits`,
+        // which bypasses `apply_effects` entirely — this is the formatting
+        // reply path, not a picker or explorer key.
+        app.handle_event(AppEvent::Lsp(omv_lsp::Event::Edits {
+            changes: vec![(
+                std::path::PathBuf::new(),
+                vec![TextEdit {
+                    range: Range::new(Position::new(0, 2), Position::new(0, 5)),
+                    new_text: "New".to_string(),
+                }],
+            )],
+        }));
+
+        let cells = screen_cells(&mut app);
+        assert_eq!(
+            render_text_of(&cells, 0),
+            "# New",
+            "an LSP formatting reply must refresh the render pane even though it never goes through apply_effects"
+        );
+    }
+
+    #[test]
+    fn the_render_pane_tracks_its_own_windows_buffer_even_when_a_sibling_is_focused() {
+        let mut app = app_with_text("# First\n");
+        ex(&mut app, "md");
+        let source = app.windows.focused_id();
+        assert_eq!(
+            app.markdown_render,
+            Some(source),
+            "the pane attaches to the window it was toggled from"
+        );
+
+        // `:vsp` focuses the new sibling and leaves `source` behind, still on
+        // buffer 0 — "move focus to the sibling" for free.
+        ex(&mut app, "vsp");
+        assert_ne!(
+            app.windows.focused_id(),
+            source,
+            "the split must focus the new sibling, not the pane's own window"
+        );
+
+        // Give the now-focused sibling a second buffer, the way `splits_can_
+        // show_two_different_buffers` does.
+        app.editor.buffers.push(omv_core::Buffer::empty());
+        app.editor.buffers[1].insert(0, "# Second\n");
+        app.editor.current = 1;
+        app.apply_effects_for_test(vec![omv_core::Effect::ScrollToCursor]);
+        assert_eq!(
+            app.windows.get(app.windows.focused_id()).unwrap().buffer,
+            1,
+            "the focused sibling now shows buffer 1"
+        );
+
+        // Change buffer 0 directly — standing in for any out-of-band edit to
+        // the pane's own buffer — while a *different* buffer is focused. Only
+        // a refresh keyed on the window's own buffer (0), not `editor.current`
+        // (1), can see this: both buffers already hold headings the parser
+        // would render the same way, so this is the one edit that tells the
+        // two apart.
+        let len = app.editor.buffers[0].rope.len_chars();
+        app.editor.buffers[0].replace(0..len, "# Changed\n");
+        app.apply_effects_for_test(vec![omv_core::Effect::ScrollToCursor]);
+
+        let rendered: String = app
+            .markdown_for(0)
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.text.as_str()))
+            .collect();
+        assert!(
+            rendered.contains("Changed"),
+            "the pane must keep refreshing its own window's buffer (0) even while buffer 1 is focused:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn jumping_into_a_longer_file_does_not_panic_the_render_pane() {
+        let mut app = app_with_text("# short\n");
+        ex(&mut app, "md");
+        screen(&mut app); // establishes text_height before the jump scrolls
+
+        let mut long_content = String::new();
+        for n in 0..500 {
+            long_content.push_str(&format!("line {n}\n"));
+        }
+        long_content.push_str("# deep heading\n");
+        let path = write_temp_markdown(&long_content);
+
+        // `Payload::Location` beyond the short buffer's length: `open_path`
+        // then `scroll_to_cursor` land `window.scroll` deep into the new,
+        // much longer file. A line past the end clamps to the last line
+        // rather than panicking.
+        app.activate_payload_for_test(Payload::Location(path.clone(), 10_000));
+
+        let cells = screen_cells(&mut app); // must not panic
+        let pane_text: String = pane_interior(&cells)
+            .iter()
+            .flat_map(|row| row.iter().map(|(symbol, _)| symbol.as_str()))
+            .collect();
+        assert!(
+            pane_text.contains("deep heading"),
+            "the render pane must show the new, longer file rather than an empty, stale cache:\n{pane_text}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_document_is_parsed_once_per_batch_and_never_by_drawing() {
+        let mut app = app_with_text("plain\n");
+
+        // Hidden: even edits must never parse.
+        press(&mut app, crossterm::event::KeyCode::Char('i'));
+        type_text(&mut app, "more");
+        press(&mut app, crossterm::event::KeyCode::Esc);
+        assert_eq!(
+            app.markdown_parses, 0,
+            "nothing parses while the pane is hidden"
+        );
+
+        ex(&mut app, "md");
+        // Exactly one, not merely "at least one": the toggle arm has no
+        // refresh call of its own, so the single end-of-batch call is the
+        // only thing that may populate the cache here. `> 0` cannot tell a
+        // correct single parse from a redundant double one.
+        assert_eq!(
+            app.markdown_parses, 1,
+            "toggling on must parse exactly once, via the end-of-batch refresh alone"
+        );
+
+        // Drawing must never move the counter, however many times it happens.
+        let after_toggle = app.markdown_parses;
+        screen(&mut app);
+        screen(&mut app);
+        screen(&mut app);
+        assert_eq!(
+            app.markdown_parses, after_toggle,
+            "repeated draws must never re-parse; only effect batches do"
+        );
+
+        // Every keystroke while visible costs exactly one parse — entering
+        // insert mode is its own batch, same as each character typed inside it.
+        press(&mut app, crossterm::event::KeyCode::Char('i'));
+        assert_eq!(
+            app.markdown_parses,
+            after_toggle + 1,
+            "entering insert mode is one effect batch"
+        );
+        type_text(&mut app, "x");
+        assert_eq!(
+            app.markdown_parses,
+            after_toggle + 2,
+            "one more keystroke is exactly one more parse"
+        );
+        type_text(&mut app, "y");
+        assert_eq!(
+            app.markdown_parses,
+            after_toggle + 3,
+            "and the next keystroke exactly one more again"
+        );
+    }
+
+    // ---- markdown render pane vs. the window tree (REQ-008) ----------------
+
+    #[test]
+    fn splitting_the_source_window_leaves_one_render_pane_on_the_original() {
+        let mut app = app_with_text("# Title\n");
+        let source = app.windows.focused_id();
+        ex(&mut app, "md");
+        assert_eq!(app.markdown_render, Some(source));
+
+        ex(&mut app, "vsp");
+        assert_eq!(
+            app.windows.count(),
+            2,
+            ":vsp with a pane visible must raise the count by exactly one, same as with no pane"
+        );
+        assert_ne!(
+            app.windows.focused_id(),
+            source,
+            "vsp focuses the new half, not the source, so the assertion below is meaningful"
+        );
+        assert_eq!(
+            app.markdown_render,
+            Some(source),
+            "the pane must stay on the window that kept the source's id, not whichever is now focused"
+        );
+
+        let out = screen(&mut app);
+        assert_eq!(
+            out.matches("Markdown").count(),
+            1,
+            "exactly one render pane must be drawn, not one per resulting window:\n{out}"
+        );
+    }
+
+    #[test]
+    fn closing_the_source_window_removes_its_render_pane() {
+        let mut app = app_with_text("# Title\n");
+        let source = app.windows.focused_id();
+        ex(&mut app, "md");
+        assert_eq!(app.markdown_render, Some(source));
+
+        ex(&mut app, "vsp");
+        screen(&mut app); // lays the windows out, which directional focus reads
+        assert_ne!(
+            app.windows.focused_id(),
+            source,
+            "vsp focuses the new sibling, not the source"
+        );
+
+        // Closing a window that is not the source must leave the pane alone.
+        ex(&mut app, "close");
+        assert_eq!(
+            app.markdown_render,
+            Some(source),
+            "closing an unrelated window must not touch the pane"
+        );
+        assert_eq!(app.windows.count(), 1);
+
+        // Recreate a sibling, return focus to the source, then close it.
+        ex(&mut app, "vsp");
+        screen(&mut app);
+        press_ctrl(&mut app, 'w');
+        press(&mut app, crossterm::event::KeyCode::Char('h'));
+        assert_eq!(
+            app.windows.focused_id(),
+            source,
+            "<C-w>h must return focus to the source window"
+        );
+        ex(&mut app, "close");
+        assert_eq!(
+            app.markdown_render, None,
+            "closing the source window must clear the pane"
+        );
+    }
+
+    #[test]
+    fn window_only_keeps_the_render_pane_only_when_the_survivor_is_the_source() {
+        // :only run from the source window keeps the pane.
+        let mut app = app_with_text("# Title\n");
+        let source = app.windows.focused_id();
+        ex(&mut app, "md");
+        ex(&mut app, "vsp");
+        screen(&mut app);
+        press_ctrl(&mut app, 'w');
+        press(&mut app, crossterm::event::KeyCode::Char('h'));
+        assert_eq!(app.windows.focused_id(), source);
+        ex(&mut app, "only");
+        assert_eq!(app.windows.count(), 1);
+        assert_eq!(
+            app.markdown_render,
+            Some(source),
+            ":only from the source window must keep its pane"
+        );
+
+        // :only run from the sibling clears the pane.
+        let mut app = app_with_text("# Title\n");
+        let source = app.windows.focused_id();
+        ex(&mut app, "md");
+        ex(&mut app, "vsp");
+        assert_ne!(
+            app.windows.focused_id(),
+            source,
+            "vsp focuses the new sibling, not the source"
+        );
+        ex(&mut app, "only");
+        assert_eq!(app.windows.count(), 1);
+        assert_eq!(
+            app.markdown_render, None,
+            ":only from a window other than the source must clear the pane"
+        );
+    }
+
+    #[test]
+    fn toggling_the_render_pane_never_changes_the_window_count() {
+        let mut app = app_with_text("# Title\n");
+        let before = app.windows.count();
+
+        ex(&mut app, "md");
+        assert_eq!(
+            app.windows.count(),
+            before,
+            "showing the pane must not add a window; it is not a member of the tree"
+        );
+
+        ex(&mut app, "md");
+        assert_eq!(
+            app.windows.count(),
+            before,
+            "hiding the pane must not remove a window either"
+        );
+    }
+
+    // ---- markdown render pane: the read-only invariants (task-06) ----------
+    //
+    // REQ-003/REQ-004. Every test below draws frames deliberately: the source
+    // window's rect is only narrowed inside `ui::render`
+    // (`crates/omv/src/ui.rs`'s `markdown_pane` closure), and `Windows::in_direction`
+    // (`crates/omv/src/window.rs:202`) judges neighbours by the rects the *last
+    // frame* assigned. A test that only presses keys never runs either of those
+    // and would pass against a broken implementation just as easily as a
+    // correct one.
+
+    #[test]
+    fn directional_focus_never_reaches_the_render_pane() {
+        // A single window has no neighbour in any direction, so `in_direction`
+        // would return `None` for every key and this test would pass
+        // vacuously against any implementation — hence the `:vsp` below.
+        let mut app = app_with_text("# Title\n");
+        ex(&mut app, "vsp");
+        ex(&mut app, "md");
+        screen(&mut app); // narrows the source window's rect and lays out the sibling
+
+        let existing: Vec<u64> = app.windows.iter().map(|w| w.id).collect();
+        let count_before = app.windows.count();
+
+        // Two full laps so a focus change that only shows up on the second
+        // press (e.g. drifting onto the pane's own geometry) is not missed.
+        for _ in 0..2 {
+            for key in ['h', 'j', 'k', 'l'] {
+                press_ctrl(&mut app, 'w');
+                press(&mut app, crossterm::event::KeyCode::Char(key));
+                // Redraw before the next direction press, so it too reasons
+                // about real rects rather than stale ones from before this key.
+                screen(&mut app);
+
+                assert!(
+                    existing.contains(&app.windows.focused_id()),
+                    "<C-w>{key} focused window {} that did not exist before the render pane appeared",
+                    app.windows.focused_id()
+                );
+                assert_eq!(
+                    app.focus,
+                    Focus::Editor,
+                    "<C-w>{key} must never move focus off the editor onto the render pane"
+                );
+                assert_eq!(
+                    app.windows.count(),
+                    count_before,
+                    "<C-w>{key} must never create or remove a window"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn editing_keys_still_reach_the_raw_buffer_while_the_render_pane_is_visible() {
+        let mut app = app_with_text("first\nsecond\nthird\n");
+        ex(&mut app, "md");
+        screen(&mut app); // narrows the source window's rect before any key is pressed
+
+        press(&mut app, crossterm::event::KeyCode::Char('i'));
+        type_text(&mut app, "X");
+        press(&mut app, crossterm::event::KeyCode::Esc);
+        screen(&mut app);
+        assert_eq!(
+            app.editor.buffer().rope.to_string(),
+            "Xfirst\nsecond\nthird\n",
+            "insert mode must still edit the raw buffer with the render pane visible"
+        );
+
+        press(&mut app, crossterm::event::KeyCode::Char('d'));
+        press(&mut app, crossterm::event::KeyCode::Char('d'));
+        screen(&mut app);
+        assert_eq!(
+            app.editor.buffer().rope.to_string(),
+            "second\nthird\n",
+            "dd must still delete from the raw buffer with the render pane visible"
+        );
+
+        press(&mut app, crossterm::event::KeyCode::Char('p'));
+        screen(&mut app);
+        assert_eq!(
+            app.editor.buffer().rope.to_string(),
+            "second\nXfirst\nthird\n",
+            "p must still paste into the raw buffer with the render pane visible"
+        );
+    }
+
+    #[test]
+    fn toggling_the_render_pane_leaves_the_source_window_exactly_as_editing_left_it() {
+        // Long enough that `G` actually scrolls, so the scroll comparison
+        // below is not trivially `0 == 0` regardless of the implementation.
+        let fixture: String = (1..=40).map(|n| format!("line {n}\n")).collect();
+
+        // `toggle` runs an identical edit script either way; when it toggles
+        // the pane, the on/off calls are placed so the *number* of `screen`
+        // draws stays the same in both runs — otherwise `text_height` (only
+        // ever written by a draw, see `crates/omv/src/ui.rs:72`) would differ
+        // between the two apps for a reason that has nothing to do with the
+        // render pane, and the comparison below would be meaningless.
+        fn run_script(app: &mut App, toggle: bool) {
+            if toggle {
+                ex(app, "md");
+            }
+            screen(app); // 1: establishes text_height, pane visible if toggled
+            press(app, crossterm::event::KeyCode::Char('i'));
+            type_text(app, "zero\n");
+            press(app, crossterm::event::KeyCode::Esc);
+            screen(app); // 2
+            press(app, crossterm::event::KeyCode::Char('G'));
+            screen(app); // 3: exercises scroll_to_cursor against the real height
+            press(app, crossterm::event::KeyCode::Char('o'));
+            type_text(app, "six");
+            press(app, crossterm::event::KeyCode::Esc);
+            screen(app); // 4
+            if toggle {
+                ex(app, "md");
+            }
+            screen(app); // 5: drawn unconditionally, so both runs draw 5 frames
+        }
+
+        let mut plain = app_with_text(&fixture);
+        run_script(&mut plain, false);
+
+        let mut toggled = app_with_text(&fixture);
+        run_script(&mut toggled, true);
+
+        assert_eq!(
+            plain.editor.buffer().rope.to_string(),
+            toggled.editor.buffer().rope.to_string(),
+            "toggling the pane on and off must not change what the edits produced"
+        );
+        assert_eq!(
+            plain.editor.buffer().cursor,
+            toggled.editor.buffer().cursor,
+            "toggling the pane on and off must not change where editing left the cursor"
+        );
+        assert_eq!(
+            plain.windows.focused().scroll,
+            toggled.windows.focused().scroll,
+            "toggling the pane on and off must not change the source window's scroll"
+        );
+        assert_eq!(
+            plain.windows.count(),
+            toggled.windows.count(),
+            "toggling the pane on and off must not leave behind or remove a window"
+        );
+    }
+
+    /// Exhaustive, no wildcard arm: if `Focus` ever gains a variant (e.g. a
+    /// preview/markdown focus for this pane, which REQ-003 forbids outright),
+    /// this stops compiling until the new variant is added below. This is a
+    /// stronger guard than this task's standing `grep -A9 'pub enum Focus' |
+    /// grep -qi markdown|render` check, which only excludes those two literal
+    /// words and would wave through e.g. `Focus::Preview`.
+    fn focus_variant_name(focus: Focus) -> &'static str {
+        match focus {
+            Focus::Editor => "Editor",
+            Focus::Explorer => "Explorer",
+            Focus::Picker => "Picker",
+            Focus::Help => "Help",
+            Focus::Substitute => "Substitute",
+            Focus::Terminal => "Terminal",
+        }
+    }
+
+    #[test]
+    fn focus_still_has_exactly_its_six_pre_existing_variants() {
+        let named: Vec<&str> = [
+            Focus::Editor,
+            Focus::Explorer,
+            Focus::Picker,
+            Focus::Help,
+            Focus::Substitute,
+            Focus::Terminal,
+        ]
+        .into_iter()
+        .map(focus_variant_name)
+        .collect();
+        assert_eq!(
+            named,
+            vec![
+                "Editor",
+                "Explorer",
+                "Picker",
+                "Help",
+                "Substitute",
+                "Terminal"
+            ],
+            "the render pane must never grow its own Focus variant (REQ-003)"
+        );
     }
 }

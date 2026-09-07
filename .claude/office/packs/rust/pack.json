@@ -1,0 +1,37 @@
+{
+  "stack": "rust",
+  "detect": ["Cargo.toml"],
+  "controls": [
+    {
+      "id": "formatter", "label": "rustfmt", "cell": "computational-sensor",
+      "files": ["rustfmt.toml"], "check": "cargo fmt --check", "fix": "cargo fmt",
+      "cost": "low", "legacy_order": 1,
+      "note": "Inherent to the toolchain and near-universally already clean."
+    },
+    {
+      "id": "linter", "label": "clippy", "cell": "computational-sensor",
+      "files": ["clippy.toml"], "check": "cargo clippy --all-targets -- -D warnings",
+      "fix": "cargo clippy --fix --allow-dirty", "cost": "medium", "legacy_order": 2,
+      "note": "On a legacy crate, start without -D warnings, record the count in harness.md, and ratchet. Denying warnings on arrival blocks every build."
+    },
+    {
+      "id": "types", "label": "cargo check", "cell": "computational-sensor",
+      "check": "cargo check --all-targets", "cost": "low", "legacy_order": 0,
+      "note": "Inherent. Rust starts with the strongest computational guide of the four stacks, which is why its harnessability floor is high."
+    },
+    {
+      "id": "tests", "label": "cargo test", "cell": "computational-sensor",
+      "check": "cargo test", "cost": "medium", "legacy_order": 3,
+      "note": "The behaviour harness."
+    },
+    {
+      "id": "deps", "label": "cargo deny", "cell": "computational-sensor",
+      "check": "cargo deny check", "cost": "low", "legacy_order": 4,
+      "note": "Continuous-monitoring class: catches advisories and licence drift long after the code stopped changing."
+    },
+    {
+      "id": "guides", "label": "CLAUDE.md conventions", "cell": "inferential-guide",
+      "files": ["GUIDE.md"], "cost": "low", "legacy_order": 0, "note": "Merged into the repo's CLAUDE.md."
+    }
+  ]
+}

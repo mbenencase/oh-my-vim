@@ -13,7 +13,7 @@ that matter when *changing* the code.
 
 ```bash
 cargo build --workspace
-cargo test --workspace          # 83 tests, all fast; no language server needed
+cargo test --workspace          # 127 tests, all fast; no language server needed
 cargo run -p omv -- src/main.rs # open the editor on a file
 cargo run -p omv -- --list-actions   # every bindable action + description
 cargo run -p omv -- --list-keys      # the keymap after config merge
@@ -68,6 +68,9 @@ paragraph.
    with no terminal — preserve it. Checked by `F3 core-purity`, which bans
    `std::process`/`std::net`/`std::env`/stdio/tokio/crossterm/ratatui from
    `omv-core` and allows `std::fs` only in `buffer.rs`, where load and save live.
+   `omv-syntax` is scanned on the same terms and has *no* `std::fs` exemption —
+   it is the same shape of thing, text in and structured data out, and nothing in
+   it has a reason to touch the filesystem.
 2. **One channel, many producers.** Input thread, LSP bridge thread, and picker
    worker threads all send `AppEvent` (`crates/omv/src/event.rs`) into a single
    `mpsc`. `event_loop` in `main.rs` blocks on `recv`, then drains `try_recv`
@@ -155,6 +158,17 @@ the command table too.
   input only. The substitute prompt is the one that also *edits*: it calls
   `Editor::substitute` and drains the effects like any other caller, so the
   replacement still goes through the core's undo transactions.
+- **The render pane is not a window.** Unlike real window splits (which are members
+  of the `Windows` tree in `crates/omv/src/window.rs`), the Markdown render pane is
+  a renderer-level companion drawn by subdividing the source window's screen rect in
+  `ui.rs`. It is stored as an editor-wide `Option<WindowId>` on `App` (tracking which
+  window it is attached to) but is never a node in the window tree and is never
+  focusable. `omv-syntax::markdown::render` returns **exactly one `MarkdownLine` per
+  source line** — that invariant is what lets both panes share `window.scroll`
+  unchanged, so the pane needs no scroll machinery of its own. Markup collapses
+  *within* a line (`**bold**` → `bold`), never across them. Breaking the one-to-one
+  rule silently misaligns the two panes; `every_source_line_produces_exactly_one_rendered_line`
+  asserts it against `source.split('\n').count()` rather than a fixed number.
 - **Full-document sync.** Both tree-sitter and LSP re-read the whole buffer on
   every `Effect::BufferChanged`. Fine at current scale; incremental is future work
   and `omv-syntax::Highlighter::highlight` is the single place it would land.
@@ -211,7 +225,7 @@ Match the existing test style: names read as sentences describing the behaviour
 (`line_wise_paste_lands_on_its_own_line`), and assertions carry a short message
 explaining the rule.
 
-The count is a ratchet. **83 passing at last measurement**, and CI fails if it
+The count is a ratchet. **127 passing at last measurement**, and CI fails if it
 drops below that — a deleted `#[test]` is otherwise indistinguishable from a
 green run. If you remove a test deliberately, lower the floor in
 `.github/workflows/ci.yml`, `.githooks/pre-push` and `.the-office/harness.md` in

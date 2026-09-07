@@ -138,6 +138,7 @@ actions! {
     Substitute            => "substitute",                "Panels",          "Find and replace text in this buffer";
     ToggleDiagnostics     => "toggle_diagnostics",        "Panels",          "Show/hide the diagnostics panel";
     ToggleTerminal        => "toggle_terminal",           "Panels",          "Show/hide the shell docked at the bottom";
+    ToggleMarkdownRender  => "toggle_markdown_render",    "Panels",          "Show/hide a rendered Markdown view beside the buffer";
     ShowKeys              => "show_keys",                 "Panels",          "Show every key binding and what it does";
 
     // ---- windows ------------------------------------------------------------
