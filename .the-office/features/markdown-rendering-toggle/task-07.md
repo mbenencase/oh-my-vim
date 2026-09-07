@@ -7,7 +7,7 @@ requirements: [REQ-007]
 acceptance_criteria: [AC-007]
 verification_mode: preservation
 depends_on: [markdown-rendering-toggle/task-06]
-status: pending
+status: completed
 tier: fast
 scope:
   - README.md
@@ -44,11 +44,11 @@ dod: |
   thing a future contributor would otherwise get wrong: the render pane is a
   renderer-level companion that subdivides a window's rect and is never a member
   of the `Windows` tree.
-attempts: 0
+attempts: 1
 max_attempts: 3
-base_commit: null
-branch: null
-commit: null
+base_commit: cd725c924900883adabd1362a35fb873c8c7ae43
+branch: development
+commit: 36f13577b79fb1e8a3079c48ef002b1567f8a7bb
 ---
 
 ## Context
