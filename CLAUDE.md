@@ -163,10 +163,12 @@ the command table too.
   a renderer-level companion drawn by subdividing the source window's screen rect in
   `ui.rs`. It is stored as an editor-wide `Option<WindowId>` on `App` (tracking which
   window it is attached to) but is never a node in the window tree and is never
-  focusable. The renderer (`omv-syntax::markdown::Renderer`) parses and renders the
-  buffer with one rendered line per source line, so both panes share a scroll offset
-  and stay approximately aligned; exact line-for-line correspondence is not required,
-  since markup collapses the line count (e.g. `**bold**` → `bold`).
+  focusable. `omv-syntax::markdown::render` returns **exactly one `MarkdownLine` per
+  source line** — that invariant is what lets both panes share `window.scroll`
+  unchanged, so the pane needs no scroll machinery of its own. Markup collapses
+  *within* a line (`**bold**` → `bold`), never across them. Breaking the one-to-one
+  rule silently misaligns the two panes; `every_source_line_produces_exactly_one_rendered_line`
+  asserts it against `source.split('\n').count()` rather than a fixed number.
 - **Full-document sync.** Both tree-sitter and LSP re-read the whole buffer on
   every `Effect::BufferChanged`. Fine at current scale; incremental is future work
   and `omv-syntax::Highlighter::highlight` is the single place it would land.
