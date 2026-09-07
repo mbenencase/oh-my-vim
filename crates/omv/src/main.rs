@@ -169,10 +169,11 @@ fn event_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::picker::PickerKind;
+    use crate::picker::{Payload, PickerKind};
     use omv_core::Action;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc::channel;
 
     fn test_app() -> App {
@@ -1168,6 +1169,226 @@ mod tests {
         assert_eq!(
             app.markdown_render, None,
             "toggling off clears the flag regardless of which window is focused"
+        );
+    }
+
+    // ---- markdown render pane: keeping it live (task-04) -------------------
+
+    /// A markdown fixture written to the OS temp directory rather than the
+    /// repo, named uniquely so parallel tests never collide over one file.
+    fn write_temp_markdown(content: &str) -> std::path::PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "omv-markdown-pane-test-{}-{id}.md",
+            std::process::id()
+        ));
+        std::fs::write(&path, content).expect("write temp markdown fixture");
+        path
+    }
+
+    #[test]
+    fn typing_updates_the_render_pane_without_toggling_it() {
+        let mut app = app_with_text("plain\n");
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+        assert_eq!(render_text_of(&cells, 0), "plain");
+
+        // Cursor starts at 0 (`app_with_text`); enter insert mode and type a
+        // heading marker in front of the existing text. No toggle in between.
+        press(&mut app, crossterm::event::KeyCode::Char('i'));
+        type_text(&mut app, "# ");
+
+        let cells = screen_cells(&mut app);
+        assert_eq!(
+            render_text_of(&cells, 0),
+            "# plain",
+            "the render pane must pick up the new heading on the very next frame"
+        );
+    }
+
+    #[test]
+    fn deleting_a_heading_removes_it_from_the_render_pane() {
+        let mut app = app_with_text("# plain\n");
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+        assert_eq!(render_text_of(&cells, 0), "# plain");
+
+        // Put the cursor right after the heading markup and delete it — the
+        // reverse of the previous test, so the cache is proved to be rebuilt
+        // wholesale rather than only ever appended to.
+        app.editor.buffer_mut().cursor = 2;
+        press(&mut app, crossterm::event::KeyCode::Char('i'));
+        press(&mut app, crossterm::event::KeyCode::Backspace);
+        press(&mut app, crossterm::event::KeyCode::Backspace);
+
+        let cells = screen_cells(&mut app);
+        assert_eq!(
+            render_text_of(&cells, 0),
+            "plain",
+            "removing the markup must remove the heading from the render, not leave it behind"
+        );
+    }
+
+    #[test]
+    fn the_render_pane_follows_the_source_window_to_another_buffer() {
+        let mut app = app_with_text("# First\n");
+        app.editor.buffers.push(omv_core::Buffer::empty());
+        app.editor.buffers[1].insert(0, "# Second\n");
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+        assert_eq!(
+            render_text_of(&cells, 0),
+            "# First",
+            "the pane starts on the buffer it was toggled on for"
+        );
+
+        // `:bn` switches the focused window's buffer without emitting a
+        // `BufferChanged` effect at all.
+        ex(&mut app, "bn");
+        let cells = screen_cells(&mut app);
+        assert_eq!(
+            render_text_of(&cells, 0),
+            "# Second",
+            "the pane must follow the source window to its new buffer"
+        );
+    }
+
+    #[test]
+    fn the_render_pane_scrolls_with_the_source_window() {
+        let mut body = String::from("# Early\n");
+        for n in 0..80 {
+            body.push_str(&format!("filler {n}\n"));
+        }
+        body.push_str("# Late\n");
+        let mut app = app_with_text(&body);
+        ex(&mut app, "md");
+        screen(&mut app); // establishes text_height, which scroll_to_cursor needs
+
+        // Jump the source window to the last line, the way `G` or a search
+        // hit would; task-01's one-line-per-source-line invariant is what
+        // makes this need no scroll machinery of its own.
+        let buf = app.editor.buffer_mut();
+        let last = buf.last_line();
+        buf.cursor = buf.line_start(last);
+        app.scroll_to_cursor();
+
+        let cells = screen_cells(&mut app);
+        let pane_text: String = pane_interior(&cells)
+            .iter()
+            .flat_map(|row| row.iter().map(|(symbol, _)| symbol.as_str()))
+            .collect();
+        assert!(
+            !pane_text.contains("Early"),
+            "scrolling past the top heading must drop it from the pane:\n{pane_text}"
+        );
+        assert!(
+            pane_text.contains("Late"),
+            "and bring the bottom heading into view:\n{pane_text}"
+        );
+    }
+
+    #[test]
+    fn opening_another_file_outside_the_effect_loop_refreshes_the_render_pane() {
+        let mut app = app_with_text("# Old\n");
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+        assert_eq!(render_text_of(&cells, 0), "# Old");
+
+        let path = write_temp_markdown("# New file\n");
+        // The picker's `Enter` arm calls `activate_payload` directly, never
+        // through `apply_effects` — drive that exact path, not
+        // `apply_effects_for_test`.
+        app.activate_payload_for_test(Payload::File(path.clone()));
+
+        let cells = screen_cells(&mut app);
+        assert_eq!(
+            render_text_of(&cells, 0),
+            "# New file",
+            "the pane must show the newly opened file, not the stale one"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn jumping_into_a_longer_file_does_not_panic_the_render_pane() {
+        let mut app = app_with_text("# short\n");
+        ex(&mut app, "md");
+        screen(&mut app); // establishes text_height before the jump scrolls
+
+        let mut long_content = String::new();
+        for n in 0..500 {
+            long_content.push_str(&format!("line {n}\n"));
+        }
+        long_content.push_str("# deep heading\n");
+        let path = write_temp_markdown(&long_content);
+
+        // `Payload::Location` beyond the short buffer's length: `open_path`
+        // then `scroll_to_cursor` land `window.scroll` deep into the new,
+        // much longer file. A line past the end clamps to the last line
+        // rather than panicking.
+        app.activate_payload_for_test(Payload::Location(path.clone(), 10_000));
+
+        let cells = screen_cells(&mut app); // must not panic
+        let pane_text: String = pane_interior(&cells)
+            .iter()
+            .flat_map(|row| row.iter().map(|(symbol, _)| symbol.as_str()))
+            .collect();
+        assert!(
+            pane_text.contains("deep heading"),
+            "the render pane must show the new, longer file rather than an empty, stale cache:\n{pane_text}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_document_is_parsed_once_per_batch_and_never_by_drawing() {
+        let mut app = app_with_text("plain\n");
+
+        // Hidden: even edits must never parse.
+        press(&mut app, crossterm::event::KeyCode::Char('i'));
+        type_text(&mut app, "more");
+        press(&mut app, crossterm::event::KeyCode::Esc);
+        assert_eq!(
+            app.markdown_parses, 0,
+            "nothing parses while the pane is hidden"
+        );
+
+        ex(&mut app, "md");
+        assert!(
+            app.markdown_parses > 0,
+            "toggling on must populate the cache"
+        );
+
+        // Drawing must never move the counter, however many times it happens.
+        let after_toggle = app.markdown_parses;
+        screen(&mut app);
+        screen(&mut app);
+        screen(&mut app);
+        assert_eq!(
+            app.markdown_parses, after_toggle,
+            "repeated draws must never re-parse; only effect batches do"
+        );
+
+        // Every keystroke while visible costs exactly one parse — entering
+        // insert mode is its own batch, same as each character typed inside it.
+        press(&mut app, crossterm::event::KeyCode::Char('i'));
+        assert_eq!(
+            app.markdown_parses,
+            after_toggle + 1,
+            "entering insert mode is one effect batch"
+        );
+        type_text(&mut app, "x");
+        assert_eq!(
+            app.markdown_parses,
+            after_toggle + 2,
+            "one more keystroke is exactly one more parse"
+        );
+        type_text(&mut app, "y");
+        assert_eq!(
+            app.markdown_parses,
+            after_toggle + 3,
+            "and the next keystroke exactly one more again"
         );
     }
 }

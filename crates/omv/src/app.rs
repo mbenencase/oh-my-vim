@@ -63,6 +63,13 @@ pub struct App {
     /// it, so "the document I parsed" has to be identified by which buffer it
     /// came from rather than by when it was parsed.
     pub markdown: HashMap<usize, Vec<MarkdownLine>>,
+    /// Counts calls to `refresh_markdown_for` that actually parsed something,
+    /// so `the_document_is_parsed_once_per_batch_and_never_by_drawing` can
+    /// pin the render pane to "once per effect batch, never from drawing". A
+    /// field rather than a `static`: the test runner is parallel, and a
+    /// `static` counter would leak state between tests sharing a process.
+    #[cfg(test)]
+    pub markdown_parses: usize,
     /// How the text area is divided, and which division has focus.
     pub windows: Windows,
     pub status: String,
@@ -111,6 +118,8 @@ impl App {
             hover: None,
             highlights: HashMap::new(),
             markdown: HashMap::new(),
+            #[cfg(test)]
+            markdown_parses: 0,
             windows: Windows::new(),
             status: String::new(),
             quit: false,
@@ -132,6 +141,11 @@ impl App {
                 self.set_scroll(0);
                 self.sync_focused_window();
                 self.refresh_highlights();
+                // Bypasses the effect loop the same way `refresh_highlights`
+                // does just above, and for the same reason: the picker, the
+                // explorer, and `E::Definition` all call this directly, never
+                // through `apply_effects`.
+                self.refresh_markdown_pane();
                 self.announce_to_lsp();
             }
             Err(e) => self.status = format!("E: {}: {e}", path.display()),
@@ -522,10 +536,20 @@ impl App {
                     self.editor.current = index;
                     self.sync_focused_window();
                     self.refresh_highlights();
+                    self.refresh_markdown_pane();
                     self.scroll_to_cursor();
                 }
             }
         }
+    }
+
+    /// Test hook: `activate_payload` is private, but `handle_picker_key`'s
+    /// `Enter` arm calls it directly, bypassing `apply_effects` entirely —
+    /// tests need to drive that exact path rather than `apply_effects_for_test`
+    /// to prove the render cache follows it too.
+    #[cfg(test)]
+    pub fn activate_payload_for_test(&mut self, payload: Payload) {
+        self.activate_payload(payload);
     }
 
     // ---- effects ------------------------------------------------------------
@@ -566,20 +590,15 @@ impl App {
                     // Toggling on always attaches to whoever is focused *now*;
                     // toggling off clears the flag regardless of focus, so a
                     // pane opened on window A and left visible after focus
-                    // moves to B still closes on the second press.
+                    // moves to B still closes on the second press. Populating
+                    // the cache for a newly-toggled-on pane is not special-cased
+                    // here: the generic refresh at the end of this batch (after
+                    // `sync_focused_window()`) does it, the same as it does for
+                    // every other buffer switch this loop produces.
                     self.markdown_render = match self.markdown_render {
                         Some(_) => None,
                         None => Some(self.windows.focused_id()),
                     };
-                    // Parse once, here, so the renderer only ever reads a
-                    // cache. Every *other* path that invalidates it belongs to
-                    // task-04. `editor.current`, not the focused window's
-                    // `buffer`: the window's copy is only written back at the
-                    // end of this effect batch, so it is stale here for the
-                    // same reason its cursor is.
-                    if self.markdown_render.is_some() {
-                        self.refresh_markdown_for(self.editor.current);
-                    }
                 }
                 Effect::ShowKeys => {
                     // Rebuilt on each open so it reflects the live keymap.
@@ -622,6 +641,12 @@ impl App {
         // `:bn`, a jump to a definition — and the focused window is the view
         // that just happened, so it records the result unconditionally.
         self.sync_focused_window();
+        // One generic refresh per batch, after the window's buffer is known to
+        // be current: this is what makes `:bn`/`:bp` (no `BufferChanged` at
+        // all) and every ordinary edit (`BufferChanged`, funnelled through
+        // here by `handle_editor_key`) both land without a special case per
+        // effect. A no-op while the pane is hidden.
+        self.refresh_markdown_pane();
     }
 
     pub fn scroll_to_cursor(&mut self) {
@@ -820,6 +845,38 @@ impl App {
         };
         let lines = markdown::render(&buffer.rope.to_string());
         self.markdown.insert(index, lines);
+        // Only counted here, on an actual parse — not on the early return
+        // above, which never touches `markdown::render`.
+        #[cfg(test)]
+        {
+            self.markdown_parses += 1;
+        }
+    }
+
+    /// Re-parse the render pane's document, if it is visible. Reads the
+    /// buffer from the window the pane is *attached to* rather than
+    /// `editor.current`, so a pane left on an unfocused window keeps tracking
+    /// that window's buffer instead of whichever one the user is now editing
+    /// (REQ-005). A no-op while the pane is hidden, so this costs nothing at
+    /// the scale CLAUDE.md already accepts for tree-sitter/LSP full-document
+    /// sync only applies while somebody is actually watching it.
+    ///
+    /// This is the single call at the end of every effect batch, plus one
+    /// call beside each place that changes a window's buffer *outside* that
+    /// loop (`open_path`, `activate_payload`'s `Payload::Buffer` arm, and the
+    /// LSP formatting path in `apply_text_edits`) — see task-04's notes on why
+    /// the effect loop alone does not see every buffer switch. `focus_window`
+    /// needs no call of its own: both of its callers already run inside
+    /// `apply_effects`, so the end-of-batch call covers it for free, and a
+    /// second call there would parse the same buffer twice in one batch.
+    fn refresh_markdown_pane(&mut self) {
+        let Some(id) = self.markdown_render else {
+            return;
+        };
+        let Some(window) = self.windows.get(id) else {
+            return;
+        };
+        self.refresh_markdown_for(window.buffer);
     }
 
     /// The rendered document for one buffer; empty when nothing has parsed it
@@ -1036,6 +1093,10 @@ impl App {
         for index in touched {
             self.refresh_highlights_for(index);
         }
+        // Reached from `handle_lsp_event`, never from `apply_effects` — same
+        // reason `open_path` needs its own call rather than relying on the
+        // generic end-of-batch one.
+        self.refresh_markdown_pane();
         self.notify_lsp_change();
         self.scroll_to_cursor();
     }
