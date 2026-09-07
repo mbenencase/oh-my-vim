@@ -8,7 +8,7 @@ use omv_core::{Editor, Effect, LspIntent, Mode, Picker as PickerRequest, Split, 
 use omv_find::{display_path, walk_files};
 use omv_lsp::lsp_types::Diagnostic;
 use omv_lsp::{Client as LspClient, LspPosition, Notification, Registry, Request as LspRequest};
-use omv_syntax::{Highlighter, Span};
+use omv_syntax::{Highlighter, MarkdownLine, Span, markdown};
 
 use crate::event::{AppEvent, to_key};
 use crate::explorer::Explorer;
@@ -57,6 +57,12 @@ pub struct App {
     /// current one alone: a split can show two files at once, and only the
     /// focused buffer's text can change under us.
     pub highlights: HashMap<usize, Vec<Span>>,
+    /// Rendered Markdown per buffer index, for the render pane to draw. Keyed
+    /// by buffer for the same reason `highlights` is, and one reason more: the
+    /// pane is attached to a *window*, and a window's buffer can change under
+    /// it, so "the document I parsed" has to be identified by which buffer it
+    /// came from rather than by when it was parsed.
+    pub markdown: HashMap<usize, Vec<MarkdownLine>>,
     /// How the text area is divided, and which division has focus.
     pub windows: Windows,
     pub status: String,
@@ -104,6 +110,7 @@ impl App {
             markdown_render: None,
             hover: None,
             highlights: HashMap::new(),
+            markdown: HashMap::new(),
             windows: Windows::new(),
             status: String::new(),
             quit: false,
@@ -564,6 +571,15 @@ impl App {
                         Some(_) => None,
                         None => Some(self.windows.focused_id()),
                     };
+                    // Parse once, here, so the renderer only ever reads a
+                    // cache. Every *other* path that invalidates it belongs to
+                    // task-04. `editor.current`, not the focused window's
+                    // `buffer`: the window's copy is only written back at the
+                    // end of this effect batch, so it is stale here for the
+                    // same reason its cursor is.
+                    if self.markdown_render.is_some() {
+                        self.refresh_markdown_for(self.editor.current);
+                    }
                 }
                 Effect::ShowKeys => {
                     // Rebuilt on each open so it reflects the live keymap.
@@ -788,6 +804,28 @@ impl App {
     /// Syntax spans for one buffer; empty for a language we cannot parse.
     pub fn highlights_for(&self, buffer: usize) -> &[Span] {
         self.highlights.get(&buffer).map_or(&[], Vec::as_slice)
+    }
+
+    // ---- markdown -----------------------------------------------------------
+
+    /// Re-parse one buffer for the render pane. Not gated on the file's
+    /// extension (REQ-006): the pane is asked for by hand, so whatever text is
+    /// there is what gets rendered.
+    pub fn refresh_markdown_for(&mut self, index: usize) {
+        let Some(buffer) = self.editor.buffers.get(index) else {
+            // No buffer, no document: drop the entry rather than leave the
+            // pane drawing a file that is gone.
+            self.markdown.remove(&index);
+            return;
+        };
+        let lines = markdown::render(&buffer.rope.to_string());
+        self.markdown.insert(index, lines);
+    }
+
+    /// The rendered document for one buffer; empty when nothing has parsed it
+    /// yet. Total, so the renderer never has to ask whether the cache is warm.
+    pub fn markdown_for(&self, buffer: usize) -> &[MarkdownLine] {
+        self.markdown.get(&buffer).map_or(&[], Vec::as_slice)
     }
 
     // ---- lsp ----------------------------------------------------------------

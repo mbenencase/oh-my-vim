@@ -7,7 +7,7 @@ requirements: [REQ-001, REQ-002, REQ-006, REQ-009]
 acceptance_criteria: [AC-001, AC-002, AC-006, AC-009]
 verification_mode: acceptance
 depends_on: [markdown-rendering-toggle/task-01, markdown-rendering-toggle/task-02]
-status: pending
+status: in-progress
 tier: deep
 scope:
   - crates/omv/src/ui.rs
@@ -31,6 +31,8 @@ checks:
   - cargo test --workspace
 sensors_added:
   - "grep guard: `ui.rs` must not call `markdown::render` — keeps parsing in `App`, out of the per-frame path"
+  - "test `a_scroll_past_the_end_of_the_cache_draws_nothing_rather_than_panicking` — pins the draw as total; verified to panic (`range start index 400 out of range for slice of length 0`) when the `get(scroll..)` is replaced by a bare slice"
+  - "tests `every_v1_construct_is_styled_distinctly_in_the_render_columns` and `heading_levels_are_styled_apart_from_each_other` — pairwise style-distinctness fitness checks over the drawn cells, so a new `markdown_style` arm or theme colour that collides with an existing one fails rather than being merged"
 dod: |
   With `app.markdown_render == Some(id)` and window `id` on screen, one frame
   shows that window's rect divided in two: the raw buffer text on the left,
@@ -43,9 +45,9 @@ dod: |
   on the buffer's path or extension; an empty buffer draws an empty pane; and a
   scroll offset past the end of a missing or stale cache entry draws an empty
   pane rather than panicking. `ui.rs` never parses — it reads a cache on `App`.
-attempts: 0
+attempts: 1
 max_attempts: 3
-base_commit: null
+base_commit: 730d4e3aeb1cc0114ff15a6dcd9464af93bcd03d
 branch: null
 commit: null
 ---
@@ -169,3 +171,69 @@ with no cache entry is the easiest way) and asserts the frame renders.
   squash would land. If neither carries `feat:`, this ships nothing — the exact
   failure of `ac06cf3` and `2863293` that CLAUDE.md's Releases section exists to
   prevent, for the third time.
+
+## Implementation notes (attempt 1)
+
+**What landed.** `Theme` gained five Markdown fields (`markdown_heading:
+[Color; HeadingLevel::MAX as usize]`, `markdown_list`, `markdown_ordered`,
+`markdown_code`, `markdown_rule`) and `Theme::markdown_style(MarkdownKind) ->
+Style`. `App` gained `markdown: HashMap<usize, Vec<MarkdownLine>>`,
+`refresh_markdown_for(index)` and `markdown_for(buffer) -> &[MarkdownLine]`,
+mirroring `highlights`/`highlights_for`. `ui::render` carves the pane out of
+the source window's rect; `ui::render_markdown_pane` draws it. Eight tests plus
+three helpers went into `crates/omv/src/main.rs`.
+
+**Design decision 1 — the rect is narrowed in place, and the split is
+computed before `app.text_height`.** The subdivision happens immediately after
+`app.windows.layout(text_area)` and writes the left slot back into
+`Windows::get_mut(id).area`, exactly as the Approach requires, for the two
+stated reasons (`render_text`'s `x < area.right()` cursor clamp, and
+`Windows::in_direction` reading last-frame rects). It sits *above* the
+`text_height` / `viewport_height` assignment even though the corrected
+reasoning says the ordering there is irrelevant — a horizontal subdivision
+changes width only. Placing it directly after `layout()` keeps "the rect a
+window owns is decided in one place" true for a reader, and is inert with
+respect to height. If a future change ever makes the pane a *horizontal*
+companion, this ordering is the one that stays correct.
+
+**Design decision 2 — the flag is read, never written, by the renderer.** A
+`markdown_render` naming a window that no longer exists draws nothing and the
+renderer leaves the stale flag alone; clearing it is task-05's. That keeps
+`ui::render`'s only mutation of `App` the two pre-existing viewport fields plus
+the window rect it is already responsible for assigning.
+
+**Design decision 3 — `refresh_markdown_for(self.editor.current)`, not
+`self.windows.focused().buffer`, in the `ToggleMarkdownRender` arm.** The
+focused window's `buffer` is written back by `sync_focused_window` only at the
+*end* of the effect batch, so inside the arm it is stale for the same reason
+its `cursor` is. `editor.current` is the buffer the focused window will be
+showing when the frame is drawn.
+
+**Design decision 4 (worth the Reviewer's eye) — the seam is painted, so the
+raw pane's edge and the render pane's border are two adjacent rules
+(`...text │┌ Markdown ───┐`).** The Approach prescribes painting it "like
+`render_divider` does", and this keeps "a window's right edge is marked by a
+one-cell seam" true whether its neighbour is another window or the render
+pane — a real `:vsp` beside a render pane looks the same on both sides. The
+alternative (drop the seam and let the pane's own border separate them) is one
+column narrower and visually lighter, but makes the raw window's edge
+inconsistent with every other split. Followed the plan; flagging it because it
+is the one purely aesthetic choice in the change.
+
+**Ratchets.** No new `unwrap()`/`expect()` in library code — the count is
+still 12; the test helpers' `unwrap`/`panic!` are in `#[cfg(test)]`. The one
+`as` added is `HeadingLevel::MAX as usize` as an array length, where `From` is
+unavailable (not const) and the `u8 -> usize` widening trips none of the four
+cast lints.
+
+**Outside this task, not fixed here.** The workspace test count is now 109
+(`cargo test --workspace`), up from 101 before this change and from the 83 the
+floor still names. Raising the floor in
+`.github/workflows/ci.yml`, `.githooks/pre-push` and `.the-office/harness.md`
+is task-07's scope, and CI only fails *below* the floor, so nothing is red in
+the meantime.
+
+**Known and accepted, per the Notes above.** With the raw pane narrowed to ~39
+columns on an 80-column terminal, a cursor past that column is no longer
+placed, because `render_text` clamps at `area.right()` and there is no
+horizontal scrolling. `:vsp` behaves identically. Not addressed.

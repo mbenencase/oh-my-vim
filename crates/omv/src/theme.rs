@@ -1,5 +1,12 @@
-use omv_syntax::HighlightKind;
+use omv_syntax::{HeadingLevel, HighlightKind, MarkdownKind};
 use ratatui::style::{Color, Modifier, Style};
+
+/// One colour per heading level. `HeadingLevel::index` is total over this
+/// range by construction, so `markdown_heading[level.index()]` needs no bound
+/// check. `as` rather than `usize::from` because an array length is a const
+/// expression and `From` is not const; `u8 -> usize` widens, so none of the
+/// four cast lints applies.
+const HEADING_LEVELS: usize = HeadingLevel::MAX as usize;
 
 /// Colours for syntax and chrome. One struct so a `themes/` directory can later
 /// deserialize straight into it without touching any render code.
@@ -44,6 +51,16 @@ pub struct Theme {
     pub punctuation: Color,
     pub attribute: Color,
     pub constant: Color,
+
+    /// Markdown render pane. One colour per heading level (REQ-002 wants the
+    /// levels told apart, not just told from prose), and one per remaining
+    /// construct. Bold and italic reuse `foreground` and are distinguished by
+    /// their modifier, which is what they mean.
+    pub markdown_heading: [Color; HEADING_LEVELS],
+    pub markdown_list: Color,
+    pub markdown_ordered: Color,
+    pub markdown_code: Color,
+    pub markdown_rule: Color,
 }
 
 impl Theme {
@@ -88,6 +105,23 @@ impl Theme {
             punctuation: Color::Rgb(0x89, 0xdd, 0xff),
             attribute: Color::Rgb(0xc0, 0x99, 0xff),
             constant: Color::Rgb(0xff, 0x98, 0x5a),
+
+            // Every colour here is distinct from every other and from
+            // `foreground`, because that is what makes the constructs
+            // distinguishable at all; `markdown_style` adds nothing but a
+            // modifier on top.
+            markdown_heading: [
+                Color::Rgb(0x82, 0xaa, 0xff),
+                Color::Rgb(0x4f, 0xd6, 0xbe),
+                Color::Rgb(0xc3, 0xe8, 0x8d),
+                Color::Rgb(0xff, 0xc7, 0x77),
+                Color::Rgb(0xff, 0x98, 0x5a),
+                Color::Rgb(0xc0, 0x99, 0xff),
+            ],
+            markdown_list: Color::Rgb(0xfc, 0xa7, 0xea),
+            markdown_ordered: Color::Rgb(0xff, 0x75, 0x7f),
+            markdown_code: Color::Rgb(0x89, 0xdd, 0xff),
+            markdown_rule: Color::Rgb(0x63, 0x6d, 0xa6),
         }
     }
 
@@ -115,6 +149,29 @@ impl Theme {
             style.add_modifier(Modifier::ITALIC)
         } else {
             style
+        }
+    }
+
+    /// The style one rendered Markdown span is drawn in. Total: every kind
+    /// maps to a style, and no kind maps to plain text's style, so a construct
+    /// is never silently indistinguishable from the prose around it.
+    pub fn markdown_style(&self, kind: MarkdownKind) -> Style {
+        use MarkdownKind::*;
+        match kind {
+            Plain => Style::default().fg(self.foreground),
+            Heading(level) => Style::default()
+                .fg(self.markdown_heading[level.index()])
+                .add_modifier(Modifier::BOLD),
+            Bold => Style::default()
+                .fg(self.foreground)
+                .add_modifier(Modifier::BOLD),
+            Italic => Style::default()
+                .fg(self.foreground)
+                .add_modifier(Modifier::ITALIC),
+            ListMarker => Style::default().fg(self.markdown_list),
+            OrderedMarker => Style::default().fg(self.markdown_ordered),
+            Code => Style::default().fg(self.markdown_code),
+            Rule => Style::default().fg(self.markdown_rule),
         }
     }
 

@@ -657,6 +657,285 @@ mod tests {
         assert_eq!(app.windows.count(), 1, ":only drops the rest");
     }
 
+    // ---- markdown render pane ----------------------------------------------
+
+    /// Like `screen`, but keeps every cell's style. The render pane's contract
+    /// is that constructs *look* different, which the flattened string throws
+    /// away, so the styled view is what those assertions read.
+    fn screen_cells(app: &mut App) -> Vec<Vec<(String, ratatui::style::Style)>> {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| ui::render(frame, app)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .chunks(80)
+            .map(|row| {
+                row.iter()
+                    .map(|cell| (cell.symbol().to_string(), cell.style()))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Column of the seam between the raw text and the render pane, read off
+    /// the drawn frame rather than recomputed, so the assertions describe what
+    /// a user would see.
+    fn seam_column(cells: &[Vec<(String, ratatui::style::Style)>]) -> usize {
+        cells[0]
+            .iter()
+            .position(|(symbol, _)| symbol == "\u{2502}")
+            .unwrap_or_else(|| panic!("no seam on the top row; the pane was not drawn"))
+    }
+
+    /// The cells inside the pane's border: rows between its top and bottom
+    /// edges, columns between its left and right ones. Derived from the drawn
+    /// seam and the frame size rather than from the layout constants, so a
+    /// test asserts on what a user would see.
+    fn pane_interior(
+        cells: &[Vec<(String, ratatui::style::Style)>],
+    ) -> Vec<&[(String, ratatui::style::Style)]> {
+        let seam = seam_column(cells);
+        let right_border = cells[0].len() - 1;
+        // The last two rows of the frame are the status and command lines; the
+        // row above them is the pane's bottom border.
+        cells[1..cells.len() - 3]
+            .iter()
+            .map(|row| &row[seam + 2..right_border])
+            .collect()
+    }
+
+    /// The style of the first non-blank cell the pane drew for one source line.
+    fn render_style(
+        cells: &[Vec<(String, ratatui::style::Style)>],
+        line: usize,
+    ) -> ratatui::style::Style {
+        pane_interior(cells)[line]
+            .iter()
+            .find(|(symbol, _)| !symbol.trim().is_empty())
+            .map(|(_, style)| *style)
+            .unwrap_or_else(|| panic!("source line {line} rendered blank"))
+    }
+
+    /// The text the render pane drew for one source line.
+    fn render_text_of(cells: &[Vec<(String, ratatui::style::Style)>], line: usize) -> String {
+        pane_interior(cells)[line]
+            .iter()
+            .map(|(symbol, _)| symbol.as_str())
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    /// `<leader>m` through the real keymap: leader is `<Space>` by default.
+    fn press_leader_m(app: &mut App) {
+        press(app, crossterm::event::KeyCode::Char(' '));
+        press(app, crossterm::event::KeyCode::Char('m'));
+    }
+
+    /// One buffer holding every construct v1 renders, one per line, so a test
+    /// can address a construct by its line number.
+    const CONSTRUCTS: &str = "# Heading\n**bold** text\n*italic* text\n- item\n1. item\n```\ncode\n```\n---\nplain text\n";
+
+    #[test]
+    fn the_render_pane_appears_beside_the_raw_text_and_leaves_again() {
+        let mut app = app_with_text("# Title\n");
+        let out = screen(&mut app);
+        assert!(
+            !out.contains("Markdown"),
+            "nothing is rendered until it is asked for:\n{out}"
+        );
+        let full_width = app.windows.focused().area.width;
+
+        press_leader_m(&mut app);
+        assert_eq!(
+            app.markdown_render,
+            Some(app.windows.focused_id()),
+            "<leader>m must attach the pane to the focused window"
+        );
+        let out = screen(&mut app);
+        assert!(out.contains("Markdown"), "the pane must be framed:\n{out}");
+        assert!(
+            out.contains("# Title"),
+            "and the raw source must still be visible beside it:\n{out}"
+        );
+        assert!(
+            app.windows.focused().area.width < full_width,
+            "the source window's own rect must be the thing that narrowed"
+        );
+        assert_eq!(
+            app.windows.count(),
+            1,
+            "the pane is not a window; the tree must not have grown"
+        );
+
+        press_leader_m(&mut app);
+        let out = screen(&mut app);
+        assert!(!out.contains("Markdown"), "a second press hides it:\n{out}");
+        assert_eq!(
+            app.windows.focused().area.width,
+            full_width,
+            "and the window returns to its full width"
+        );
+    }
+
+    #[test]
+    fn the_md_command_shows_and_hides_the_same_pane() {
+        let mut app = app_with_text("# Title\n");
+        screen(&mut app);
+        let full_width = app.windows.focused().area.width;
+
+        ex(&mut app, "md");
+        let out = screen(&mut app);
+        assert!(out.contains("Markdown"), ":md must show the pane:\n{out}");
+
+        // The long spelling is the same toggle, not a second pane.
+        ex(&mut app, "markdown");
+        let out = screen(&mut app);
+        assert!(
+            !out.contains("Markdown"),
+            ":markdown must hide the same pane:\n{out}"
+        );
+        assert_eq!(app.markdown_render, None);
+        assert_eq!(app.windows.focused().area.width, full_width);
+    }
+
+    #[test]
+    fn raw_source_on_the_left_and_the_render_on_the_right() {
+        let mut app = app_with_text("**bold**\n");
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+        let seam = seam_column(&cells);
+
+        let raw: String = cells[0][..seam]
+            .iter()
+            .map(|(symbol, _)| symbol.as_str())
+            .collect();
+        assert!(
+            raw.contains("**bold**"),
+            "the literal source must stay to the left of the seam: {raw:?}"
+        );
+        let rendered = render_text_of(&cells, 0);
+        assert_eq!(
+            rendered, "bold",
+            "and the collapsed render must be to its right"
+        );
+    }
+
+    #[test]
+    fn every_v1_construct_is_styled_distinctly_in_the_render_columns() {
+        let mut app = app_with_text(CONSTRUCTS);
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+
+        // (source line, what lives there) — `plain text` is the baseline every
+        // other construct has to differ from.
+        let constructs = [
+            (0, "heading"),
+            (1, "bold"),
+            (2, "italic"),
+            (3, "unordered item"),
+            (4, "ordered item"),
+            (6, "fenced code"),
+            (8, "horizontal rule"),
+            (9, "plain text"),
+        ];
+        let styles: Vec<_> = constructs
+            .iter()
+            .map(|(line, name)| (name, render_style(&cells, *line)))
+            .collect();
+
+        for (i, (a, style_a)) in styles.iter().enumerate() {
+            for (b, style_b) in styles.iter().skip(i + 1) {
+                assert_ne!(style_a, style_b, "{a} and {b} must not render identically");
+            }
+        }
+    }
+
+    #[test]
+    fn heading_levels_are_styled_apart_from_each_other() {
+        let mut app = app_with_text("# a\n## b\n### c\n#### d\n##### e\n###### f\n");
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+
+        let styles: Vec<_> = (0..6).map(|line| render_style(&cells, line)).collect();
+        for (i, a) in styles.iter().enumerate() {
+            for (j, b) in styles.iter().enumerate().skip(i + 1) {
+                assert_ne!(a, b, "h{} and h{} must differ", i + 1, j + 1);
+            }
+        }
+    }
+
+    #[test]
+    fn the_render_pane_ignores_the_files_extension() {
+        // REQ-006: the toggle is asked for by hand, so it never consults the path.
+        for path in [None, Some("notes.txt")] {
+            let mut app = app_with_text("# Title\n");
+            app.editor.buffer_mut().path = path.map(|p| std::env::current_dir().unwrap().join(p));
+            ex(&mut app, "md");
+            let out = screen(&mut app);
+            assert!(
+                out.contains("Markdown"),
+                "the pane must open for {path:?}:\n{out}"
+            );
+            let cells = screen_cells(&mut app);
+            assert_eq!(
+                render_text_of(&cells, 0),
+                "# Title",
+                "and render the heading for {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_buffer_renders_an_empty_pane_rather_than_failing() {
+        let mut app = app_with_text("");
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+        let seam = seam_column(&cells);
+
+        assert!(
+            cells[0][seam..].iter().any(|(symbol, _)| symbol == "M"),
+            "the pane is still framed and titled"
+        );
+        for (line, row) in pane_interior(&cells).iter().enumerate() {
+            let drawn: String = row.iter().map(|(symbol, _)| symbol.as_str()).collect();
+            assert_eq!(
+                drawn.trim(),
+                "",
+                "an empty buffer draws nothing inside the pane, but row {line} has content"
+            );
+        }
+    }
+
+    #[test]
+    fn a_scroll_past_the_end_of_the_cache_draws_nothing_rather_than_panicking() {
+        let mut app = app_with_text("# short\n");
+        ex(&mut app, "md");
+        screen(&mut app);
+
+        // A jump into a longer file — the find-text picker, goto-definition —
+        // moves the window to another buffer and scrolls it there, without
+        // passing anywhere that refreshes this cache. The pane must survive a
+        // scroll well past the document it still holds.
+        app.editor.buffers.push(omv_core::Buffer::empty());
+        app.editor.buffers[1].insert(0, &"line\n".repeat(500));
+        app.editor.current = 1;
+        let window = app.windows.focused_mut();
+        window.buffer = 1;
+        window.scroll = 400;
+
+        let cells = screen_cells(&mut app);
+        for (line, row) in pane_interior(&cells).iter().enumerate() {
+            let drawn: String = row.iter().map(|(symbol, _)| symbol.as_str()).collect();
+            assert_eq!(
+                drawn.trim(),
+                "",
+                "a stale, too-short cache draws an empty pane, but row {line} has content"
+            );
+        }
+    }
+
     // ---- terminal panel ----------------------------------------------------
 
     /// Like `test_app`, but keeps the receiving end so a test can pump the
