@@ -1311,6 +1311,113 @@ mod tests {
     }
 
     #[test]
+    fn switching_buffers_through_the_picker_refreshes_the_render_pane() {
+        let mut app = app_with_text("# First\n");
+        app.editor.buffers.push(omv_core::Buffer::empty());
+        app.editor.buffers[1].insert(0, "# Second\n");
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+        assert_eq!(render_text_of(&cells, 0), "# First");
+
+        // The buffers picker's `Enter` arm calls `activate_payload` directly,
+        // bypassing `apply_effects` and its generic end-of-batch refresh —
+        // drive that exact path, not `apply_effects_for_test`.
+        app.activate_payload_for_test(Payload::Buffer(1));
+
+        let cells = screen_cells(&mut app);
+        assert_eq!(
+            render_text_of(&cells, 0),
+            "# Second",
+            "switching buffers through the picker must refresh the render pane"
+        );
+    }
+
+    #[test]
+    fn lsp_formatting_refreshes_the_render_pane_outside_the_effect_loop() {
+        use omv_lsp::lsp_types::{Position, Range, TextEdit};
+        let mut app = app_with_text("# Old\n");
+        // `apply_text_edits` resolves an empty-path edit to "the buffer that
+        // asked", which requires the current buffer to actually have a path.
+        app.editor.buffer_mut().path = Some(std::env::current_dir().unwrap().join("scratch.md"));
+        ex(&mut app, "md");
+        let cells = screen_cells(&mut app);
+        assert_eq!(render_text_of(&cells, 0), "# Old");
+
+        // `handle_lsp_event`'s `E::Edits` arm reaches `apply_text_edits`,
+        // which bypasses `apply_effects` entirely — this is the formatting
+        // reply path, not a picker or explorer key.
+        app.handle_event(AppEvent::Lsp(omv_lsp::Event::Edits {
+            changes: vec![(
+                std::path::PathBuf::new(),
+                vec![TextEdit {
+                    range: Range::new(Position::new(0, 2), Position::new(0, 5)),
+                    new_text: "New".to_string(),
+                }],
+            )],
+        }));
+
+        let cells = screen_cells(&mut app);
+        assert_eq!(
+            render_text_of(&cells, 0),
+            "# New",
+            "an LSP formatting reply must refresh the render pane even though it never goes through apply_effects"
+        );
+    }
+
+    #[test]
+    fn the_render_pane_tracks_its_own_windows_buffer_even_when_a_sibling_is_focused() {
+        let mut app = app_with_text("# First\n");
+        ex(&mut app, "md");
+        let source = app.windows.focused_id();
+        assert_eq!(
+            app.markdown_render,
+            Some(source),
+            "the pane attaches to the window it was toggled from"
+        );
+
+        // `:vsp` focuses the new sibling and leaves `source` behind, still on
+        // buffer 0 — "move focus to the sibling" for free.
+        ex(&mut app, "vsp");
+        assert_ne!(
+            app.windows.focused_id(),
+            source,
+            "the split must focus the new sibling, not the pane's own window"
+        );
+
+        // Give the now-focused sibling a second buffer, the way `splits_can_
+        // show_two_different_buffers` does.
+        app.editor.buffers.push(omv_core::Buffer::empty());
+        app.editor.buffers[1].insert(0, "# Second\n");
+        app.editor.current = 1;
+        app.apply_effects_for_test(vec![omv_core::Effect::ScrollToCursor]);
+        assert_eq!(
+            app.windows.get(app.windows.focused_id()).unwrap().buffer,
+            1,
+            "the focused sibling now shows buffer 1"
+        );
+
+        // Change buffer 0 directly — standing in for any out-of-band edit to
+        // the pane's own buffer — while a *different* buffer is focused. Only
+        // a refresh keyed on the window's own buffer (0), not `editor.current`
+        // (1), can see this: both buffers already hold headings the parser
+        // would render the same way, so this is the one edit that tells the
+        // two apart.
+        let len = app.editor.buffers[0].rope.len_chars();
+        app.editor.buffers[0].replace(0..len, "# Changed\n");
+        app.apply_effects_for_test(vec![omv_core::Effect::ScrollToCursor]);
+
+        let rendered: String = app
+            .markdown_for(0)
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.text.as_str()))
+            .collect();
+        assert!(
+            rendered.contains("Changed"),
+            "the pane must keep refreshing its own window's buffer (0) even while buffer 1 is focused:\n{rendered}"
+        );
+    }
+
+    #[test]
     fn jumping_into_a_longer_file_does_not_panic_the_render_pane() {
         let mut app = app_with_text("# short\n");
         ex(&mut app, "md");
@@ -1355,9 +1462,13 @@ mod tests {
         );
 
         ex(&mut app, "md");
-        assert!(
-            app.markdown_parses > 0,
-            "toggling on must populate the cache"
+        // Exactly one, not merely "at least one": the toggle arm has no
+        // refresh call of its own, so the single end-of-batch call is the
+        // only thing that may populate the cache here. `> 0` cannot tell a
+        // correct single parse from a redundant double one.
+        assert_eq!(
+            app.markdown_parses, 1,
+            "toggling on must parse exactly once, via the end-of-batch refresh alone"
         );
 
         // Drawing must never move the counter, however many times it happens.

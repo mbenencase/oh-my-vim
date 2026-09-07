@@ -7,7 +7,7 @@ requirements: [REQ-005]
 acceptance_criteria: [AC-005]
 verification_mode: acceptance
 depends_on: [markdown-rendering-toggle/task-03]
-status: pending
+status: in-progress
 tier: standard
 scope:
   - crates/omv/src/app.rs
@@ -40,9 +40,9 @@ dod: |
   content with it. Drawing frames never parses: the parse counter is unchanged
   across repeated `screen()` calls and unchanged entirely while the pane is
   hidden.
-attempts: 0
+attempts: 2
 max_attempts: 3
-base_commit: null
+base_commit: f84f37d2cf65e4b8492d998140b45a2fdbba38ff
 branch: null
 commit: null
 ---
@@ -138,3 +138,41 @@ from task-03 and the existing `press` / `type_text` / `ex` helpers:
   into the repo.
 
 ## Notes
+
+Deliberate deviation from the literal "pair every one of the five" instruction,
+recorded here because the instruction's own wording ("once per batch") is what
+forced it: `refresh_markdown_pane` is called at only four sites —
+`open_path`, `activate_payload`'s `Payload::Buffer` arm, the LSP formatting
+loop in `apply_text_edits`, and once at the end of `apply_effects` (after
+`sync_focused_window()`) — rather than five, and the `Effect::ToggleMarkdownRender`
+arm's own direct `refresh_markdown_for` call from task-02/03 was removed
+rather than kept alongside the new blanket call.
+
+Reasoning: both of `focus_window`'s callers (`Effect::FocusWindow` and
+`Effect::CloseWindow`) already run inside `apply_effects`'s loop, and so does
+`Effect::ToggleMarkdownRender`. The one generic call added at the end of
+`apply_effects` already covers all three — a buffer switch made *inside* the
+loop is exactly what the blanket end-of-batch refresh exists to catch, per
+this task's own note that `Effect::BufferChanged` "gets edits for free" from
+that same call. Adding a *second* refresh inside `focus_window` (or leaving
+the toggle arm's own call in place) would not be wrong for correctness — the
+pane would still show the right document — but it would be a redundant
+second parse of the same buffer in the same effect batch, because the
+end-of-batch call already parses it once. (An earlier draft of this note
+justified the omission by claiming the redundant call "would directly
+contradict" `the_document_is_parsed_once_per_batch_and_never_by_drawing`;
+that was false as written — that test asserted `markdown_parses > 0`, which
+cannot distinguish one parse from two, so a reintroduced redundant call left
+it green. The test now asserts `== 1`, so the claim is true today, but the
+reason to avoid the redundant call was never "the test would fail" — it is
+that the end-of-batch call already covers the toggle arm, full stop.) The
+four-plus-one call sites above are the complete set of places a buffer can
+change under the pane without a redundant second parse in the same batch:
+`open_path`, `activate_payload`'s `Payload::Buffer` arm, and
+`apply_text_edits` are the only three that bypass `apply_effects` entirely;
+everything reachable through the effect loop — `BufferChanged`,
+`NextBuffer`/`PrevBuffer` (no `BufferChanged` at all), `FocusWindow`,
+`CloseWindow`, and `ToggleMarkdownRender` alike — is caught once, generically,
+by the call at the end of `apply_effects`.
+- **review findings (attempt 2):** Mutation testing found three surviving mutants on the exact bypass paths this task exists to cover: deleting the Payload::Buffer refresh, deleting the apply_text_edits refresh, and swapping window.buffer for editor.current each killed zero tests. Also the parse-counter test asserted `> 0` rather than `== 1`, so it could not see a double parse.
+- **attempt 2 fix:** added `switching_buffers_through_the_picker_refreshes_the_render_pane` (kills the Payload::Buffer mutant), `lsp_formatting_refreshes_the_render_pane_outside_the_effect_loop` (kills the apply_text_edits mutant), and `the_render_pane_tracks_its_own_windows_buffer_even_when_a_sibling_is_focused` (kills the window.buffer-vs-editor.current mutant). Tightened `the_document_is_parsed_once_per_batch_and_never_by_drawing`'s toggle assertion to `assert_eq!(.., 1, ..)` and corrected the reasoning above. Each new test was verified to fail against the mutated line before being restored — see the SWE report for the exact failure output.
