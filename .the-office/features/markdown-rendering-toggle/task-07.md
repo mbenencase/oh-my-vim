@@ -109,3 +109,10 @@ No source file changes here — the scope list has no `crates/**` entry, and
   CI", in the `office audit still reports rust:tests missing` row) is a live
   count claim rather than history, so it is pinned by its own guard and must be
   updated with the rest; only the `61 tests` history line stays untouched.
+
+- **Write the MEASURED count, not a remembered one.** The suite was measured at
+  **101** at task-02's commit (`2a535e7`) using CI's own summation
+  (`cargo test --workspace | sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' | awk '{s+=$1} END {print s+0}'`).
+  Reports during tasks 01 and 02 quoted 97, which was 4 low at both ends. Re-measure
+  at the time you run, and write that number into all three floors — the checks
+  assert agreement between the files, so a wrong-but-consistent number would pass.

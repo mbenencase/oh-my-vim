@@ -155,3 +155,17 @@ with no cache entry is the easiest way) and asserts the frame renders.
   at `x < area.right()` and there is no horizontal scrolling — roughly column 33
   on an 80-column `TestBackend`. `:vsp` already behaves this way, and the spec's
   "terminal too narrow" clause covers it. Do not add horizontal scrolling here.
+
+- **This task's commit subject must be `feat:`, and so must the PR title.**
+  It is the commit that first makes the feature observable — the pane is drawn
+  and `<leader>m` stops being a documented no-op. task-01 (`f13dcba`) and
+  task-02 (`2a535e7`) both landed as `chore:` deliberately and correctly, and
+  task-07 is instructed to use `docs:`/`chore:` on the reasoning that "the
+  feature's own release comes from the earlier commits" — which is false as
+  written, because there are no earlier releasing commits. `next-version.sh`
+  runs `git log --no-merges` over the range, and this repo lands feature
+  branches with merge commits (`eba62a3`), so the individual subjects are what
+  the classifier reads; CI additionally checks the PR *title*, which is what a
+  squash would land. If neither carries `feat:`, this ships nothing — the exact
+  failure of `ac06cf3` and `2863293` that CLAUDE.md's Releases section exists to
+  prevent, for the third time.

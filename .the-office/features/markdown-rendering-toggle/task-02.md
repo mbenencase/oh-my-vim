@@ -7,7 +7,7 @@ requirements: [REQ-007]
 acceptance_criteria: [AC-007]
 verification_mode: acceptance
 depends_on: []
-status: pending
+status: completed
 tier: standard
 scope:
   - crates/omv-core/src/action.rs
@@ -41,11 +41,11 @@ dod: |
   turns into `app.markdown_render = Some(focused window id)` when hidden and
   `None` when visible, regardless of which window is focused at the time.
   `--list-actions` and `--list-keys` both show it. Nothing is drawn yet.
-attempts: 0
+attempts: 1
 max_attempts: 3
-base_commit: null
-branch: null
-commit: null
+base_commit: f13dcba4db5ca727542538673d1f721ca914195c
+branch: development
+commit: 2a535e78ab1cf85571753ba88931dde0b9f6ab1b
 ---
 
 ## Context
