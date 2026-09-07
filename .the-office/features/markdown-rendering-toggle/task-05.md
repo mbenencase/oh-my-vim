@@ -7,7 +7,7 @@ requirements: [REQ-008]
 acceptance_criteria: [AC-008]
 verification_mode: acceptance
 depends_on: [markdown-rendering-toggle/task-04]
-status: in-progress
+status: completed
 tier: standard
 scope:
   - crates/omv/src/app.rs
@@ -38,8 +38,8 @@ dod: |
 attempts: 1
 max_attempts: 3
 base_commit: ce800ab717ba0ad21647288ca441fc76dfce42d2
-branch: null
-commit: null
+branch: development
+commit: 952a516025fb990d430d4a9b73e679ca70d063b6
 ---
 
 ## Context

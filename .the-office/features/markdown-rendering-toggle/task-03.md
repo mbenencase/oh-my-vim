@@ -7,7 +7,7 @@ requirements: [REQ-001, REQ-002, REQ-006, REQ-009]
 acceptance_criteria: [AC-001, AC-002, AC-006, AC-009]
 verification_mode: acceptance
 depends_on: [markdown-rendering-toggle/task-01, markdown-rendering-toggle/task-02]
-status: in-progress
+status: completed
 tier: deep
 scope:
   - crates/omv/src/ui.rs
@@ -48,8 +48,8 @@ dod: |
 attempts: 1
 max_attempts: 3
 base_commit: 730d4e3aeb1cc0114ff15a6dcd9464af93bcd03d
-branch: null
-commit: null
+branch: development
+commit: a4594de2e6fe3f268e8513602b7f15c684312cbc
 ---
 
 ## Context

@@ -7,7 +7,7 @@ requirements: [REQ-003, REQ-004]
 acceptance_criteria: [AC-003, AC-004]
 verification_mode: preservation
 depends_on: [markdown-rendering-toggle/task-05]
-status: in-progress
+status: completed
 tier: standard
 scope:
   - crates/omv/src/main.rs
@@ -39,8 +39,8 @@ dod: |
 attempts: 1
 max_attempts: 3
 base_commit: 952a516025fb990d430d4a9b73e679ca70d063b6
-branch: null
-commit: null
+branch: development
+commit: 80ec0f4d20a8259239ebbacd0890b825d6ed6ea6
 ---
 
 ## Context
