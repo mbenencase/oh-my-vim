@@ -68,6 +68,9 @@ paragraph.
    with no terminal — preserve it. Checked by `F3 core-purity`, which bans
    `std::process`/`std::net`/`std::env`/stdio/tokio/crossterm/ratatui from
    `omv-core` and allows `std::fs` only in `buffer.rs`, where load and save live.
+   `omv-syntax` is scanned on the same terms and has *no* `std::fs` exemption —
+   it is the same shape of thing, text in and structured data out, and nothing in
+   it has a reason to touch the filesystem.
 2. **One channel, many producers.** Input thread, LSP bridge thread, and picker
    worker threads all send `AppEvent` (`crates/omv/src/event.rs`) into a single
    `mpsc`. `event_loop` in `main.rs` blocks on `recv`, then drains `try_recv`
