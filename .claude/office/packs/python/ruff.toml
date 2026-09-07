@@ -1,0 +1,15 @@
+# Installed by the-office. Deliberately narrow: a legacy repo that lights up
+# with 4,000 violations gets its harness switched off by the first person who
+# hits it. Widen the rule set as a tracked task, not as an install default.
+line-length = 100
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "I"]   # pycodestyle errors, pyflakes, import sorting
+ignore = ["E501"]          # line length is the formatter's job, not the linter's
+
+[lint.per-file-ignores]
+"tests/**" = ["F401"]
+
+[format]
+quote-style = "double"

@@ -1,0 +1,21 @@
+# Installed by the-office. Narrow by design.
+#
+# new-from-rev gates NEW code without demanding a backlog rewrite — the single
+# most important setting for a legacy repo. Remove it once the backlog is clean.
+run:
+  timeout: 3m
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck      # unchecked errors — the highest-value Go linter by a wide margin
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+issues:
+  new-from-rev: HEAD~1
+  exclude-rules:
+    - path: _test\.go
+      linters: [errcheck]

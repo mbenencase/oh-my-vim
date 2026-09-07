@@ -1,0 +1,14 @@
+# Installed by the-office. Fast controls only — a pre-commit hook that takes
+# more than a few seconds gets bypassed with --no-verify.
+pre-commit:
+  parallel: true
+  commands:
+    format:
+      glob: '*.{js,ts,jsx,tsx,json,css,md}'
+      run: npx prettier --check {staged_files}
+    lint:
+      glob: '*.{js,ts,jsx,tsx}'
+      run: npx eslint {staged_files}
+    board:
+      glob: '.the-office/**'
+      run: node .claude/office/bin/office.mjs validate

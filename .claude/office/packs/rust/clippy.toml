@@ -1,0 +1,5 @@
+# Installed by the-office.
+# Thresholds, not lint selection — lint groups belong in Cargo.toml [lints].
+cognitive-complexity-threshold = 20
+too-many-arguments-threshold = 7
+type-complexity-threshold = 300

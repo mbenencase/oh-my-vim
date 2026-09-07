@@ -1,0 +1,25 @@
+version: {{VERSION}}
+
+# Model tiers. Task files reference the tier, never a model id, so a model
+# release does not invalidate every task on the board.
+tiers:
+  fast: haiku
+  standard: sonnet
+  deep: opus
+
+# Loop bounds. Exceeding one escalates to a human rather than spinning.
+caps:
+  plan_iterations: 3
+  review_iterations: 3
+
+# Where a human must approve. before_harness_change is the one worth defending:
+# a new hook changes every contributor's workflow.
+gates:
+  after_po_clarification: true
+  after_plan_converges: true
+  before_harness_change: true
+
+janitor:
+  recurrence_threshold: 3
+
+stacks: []
