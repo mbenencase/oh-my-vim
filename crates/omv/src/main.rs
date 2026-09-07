@@ -1634,4 +1634,195 @@ mod tests {
             "hiding the pane must not remove a window either"
         );
     }
+
+    // ---- markdown render pane: the read-only invariants (task-06) ----------
+    //
+    // REQ-003/REQ-004. Every test below draws frames deliberately: the source
+    // window's rect is only narrowed inside `ui::render`
+    // (`crates/omv/src/ui.rs`'s `markdown_pane` closure), and `Windows::in_direction`
+    // (`crates/omv/src/window.rs:202`) judges neighbours by the rects the *last
+    // frame* assigned. A test that only presses keys never runs either of those
+    // and would pass against a broken implementation just as easily as a
+    // correct one.
+
+    #[test]
+    fn directional_focus_never_reaches_the_render_pane() {
+        // A single window has no neighbour in any direction, so `in_direction`
+        // would return `None` for every key and this test would pass
+        // vacuously against any implementation — hence the `:vsp` below.
+        let mut app = app_with_text("# Title\n");
+        ex(&mut app, "vsp");
+        ex(&mut app, "md");
+        screen(&mut app); // narrows the source window's rect and lays out the sibling
+
+        let existing: Vec<u64> = app.windows.iter().map(|w| w.id).collect();
+        let count_before = app.windows.count();
+
+        // Two full laps so a focus change that only shows up on the second
+        // press (e.g. drifting onto the pane's own geometry) is not missed.
+        for _ in 0..2 {
+            for key in ['h', 'j', 'k', 'l'] {
+                press_ctrl(&mut app, 'w');
+                press(&mut app, crossterm::event::KeyCode::Char(key));
+                // Redraw before the next direction press, so it too reasons
+                // about real rects rather than stale ones from before this key.
+                screen(&mut app);
+
+                assert!(
+                    existing.contains(&app.windows.focused_id()),
+                    "<C-w>{key} focused window {} that did not exist before the render pane appeared",
+                    app.windows.focused_id()
+                );
+                assert_eq!(
+                    app.focus,
+                    Focus::Editor,
+                    "<C-w>{key} must never move focus off the editor onto the render pane"
+                );
+                assert_eq!(
+                    app.windows.count(),
+                    count_before,
+                    "<C-w>{key} must never create or remove a window"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn editing_keys_still_reach_the_raw_buffer_while_the_render_pane_is_visible() {
+        let mut app = app_with_text("first\nsecond\nthird\n");
+        ex(&mut app, "md");
+        screen(&mut app); // narrows the source window's rect before any key is pressed
+
+        press(&mut app, crossterm::event::KeyCode::Char('i'));
+        type_text(&mut app, "X");
+        press(&mut app, crossterm::event::KeyCode::Esc);
+        screen(&mut app);
+        assert_eq!(
+            app.editor.buffer().rope.to_string(),
+            "Xfirst\nsecond\nthird\n",
+            "insert mode must still edit the raw buffer with the render pane visible"
+        );
+
+        press(&mut app, crossterm::event::KeyCode::Char('d'));
+        press(&mut app, crossterm::event::KeyCode::Char('d'));
+        screen(&mut app);
+        assert_eq!(
+            app.editor.buffer().rope.to_string(),
+            "second\nthird\n",
+            "dd must still delete from the raw buffer with the render pane visible"
+        );
+
+        press(&mut app, crossterm::event::KeyCode::Char('p'));
+        screen(&mut app);
+        assert_eq!(
+            app.editor.buffer().rope.to_string(),
+            "second\nXfirst\nthird\n",
+            "p must still paste into the raw buffer with the render pane visible"
+        );
+    }
+
+    #[test]
+    fn toggling_the_render_pane_leaves_the_source_window_exactly_as_editing_left_it() {
+        // Long enough that `G` actually scrolls, so the scroll comparison
+        // below is not trivially `0 == 0` regardless of the implementation.
+        let fixture: String = (1..=40).map(|n| format!("line {n}\n")).collect();
+
+        // `toggle` runs an identical edit script either way; when it toggles
+        // the pane, the on/off calls are placed so the *number* of `screen`
+        // draws stays the same in both runs — otherwise `text_height` (only
+        // ever written by a draw, see `crates/omv/src/ui.rs:72`) would differ
+        // between the two apps for a reason that has nothing to do with the
+        // render pane, and the comparison below would be meaningless.
+        fn run_script(app: &mut App, toggle: bool) {
+            if toggle {
+                ex(app, "md");
+            }
+            screen(app); // 1: establishes text_height, pane visible if toggled
+            press(app, crossterm::event::KeyCode::Char('i'));
+            type_text(app, "zero\n");
+            press(app, crossterm::event::KeyCode::Esc);
+            screen(app); // 2
+            press(app, crossterm::event::KeyCode::Char('G'));
+            screen(app); // 3: exercises scroll_to_cursor against the real height
+            press(app, crossterm::event::KeyCode::Char('o'));
+            type_text(app, "six");
+            press(app, crossterm::event::KeyCode::Esc);
+            screen(app); // 4
+            if toggle {
+                ex(app, "md");
+            }
+            screen(app); // 5: drawn unconditionally, so both runs draw 5 frames
+        }
+
+        let mut plain = app_with_text(&fixture);
+        run_script(&mut plain, false);
+
+        let mut toggled = app_with_text(&fixture);
+        run_script(&mut toggled, true);
+
+        assert_eq!(
+            plain.editor.buffer().rope.to_string(),
+            toggled.editor.buffer().rope.to_string(),
+            "toggling the pane on and off must not change what the edits produced"
+        );
+        assert_eq!(
+            plain.editor.buffer().cursor,
+            toggled.editor.buffer().cursor,
+            "toggling the pane on and off must not change where editing left the cursor"
+        );
+        assert_eq!(
+            plain.windows.focused().scroll,
+            toggled.windows.focused().scroll,
+            "toggling the pane on and off must not change the source window's scroll"
+        );
+        assert_eq!(
+            plain.windows.count(),
+            toggled.windows.count(),
+            "toggling the pane on and off must not leave behind or remove a window"
+        );
+    }
+
+    /// Exhaustive, no wildcard arm: if `Focus` ever gains a variant (e.g. a
+    /// preview/markdown focus for this pane, which REQ-003 forbids outright),
+    /// this stops compiling until the new variant is added below. This is a
+    /// stronger guard than this task's standing `grep -A9 'pub enum Focus' |
+    /// grep -qi markdown|render` check, which only excludes those two literal
+    /// words and would wave through e.g. `Focus::Preview`.
+    fn focus_variant_name(focus: Focus) -> &'static str {
+        match focus {
+            Focus::Editor => "Editor",
+            Focus::Explorer => "Explorer",
+            Focus::Picker => "Picker",
+            Focus::Help => "Help",
+            Focus::Substitute => "Substitute",
+            Focus::Terminal => "Terminal",
+        }
+    }
+
+    #[test]
+    fn focus_still_has_exactly_its_six_pre_existing_variants() {
+        let named: Vec<&str> = [
+            Focus::Editor,
+            Focus::Explorer,
+            Focus::Picker,
+            Focus::Help,
+            Focus::Substitute,
+            Focus::Terminal,
+        ]
+        .into_iter()
+        .map(focus_variant_name)
+        .collect();
+        assert_eq!(
+            named,
+            vec![
+                "Editor",
+                "Explorer",
+                "Picker",
+                "Help",
+                "Substitute",
+                "Terminal"
+            ],
+            "the render pane must never grow its own Focus variant (REQ-003)"
+        );
+    }
 }
